@@ -1,0 +1,11 @@
+# Gemeinsames Eingabefeld fuer "neuer Standort scannen" (DAB+ und DVB-T
+# nutzen denselben Ortsnamen, damit er nicht doppelt eingegeben werden muss).
+#
+# In diesem Projekt lebt das im ohnehin schon vorhandenen "Zonen"-Package
+# (da es sich thematisch auch um einen Standortnamen handelt) - wenn du kein
+# eigenes Zonen-Package hast, leg diesen Block einfach in ein beliebiges
+# eigenes Package (z.B. packages/dab_scan.yaml selbst).
+input_text:
+  neuer_standort_name:
+    name: "Neuer Standort (Ortsname)"
+    initial: ""

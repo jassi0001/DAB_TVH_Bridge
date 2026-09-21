@@ -1,0 +1,5 @@
+# raw DAB name = display name
+# one per line, used by generate_m3u.py to canonicalize station names
+# before they reach TVHeadend (also used for de-duplication).
+NDR 2 NDS=NDR 2
+NDR 1 Niedersachsen=NDR 1 Radio

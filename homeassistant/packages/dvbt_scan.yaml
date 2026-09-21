@@ -1,0 +1,371 @@
+# Home Assistant package: DVB-T Standort-Umschaltung fuer die TurboSight-Karte
+# auf dem Wohnwagen-LibreELEC (192.168.0.200). Eigener Dienst (dvbt-bridge,
+# Port 8082), bewusst getrennt vom DAB+ Package (dab_scan.yaml).
+#
+# Installation:
+#  1. Diese Datei nach <config>/packages/dvbt_scan.yaml legen
+#  2. Home Assistant neu starten (Einstellungen -> System -> Neu starten)
+#  3. Setzt input_text.neuer_standort_name aus packages/zonen.yaml voraus
+#     (wird auch vom DAB+ Package genutzt).
+#  4. Dashboard-Karten hinzufuegen, z.B.:
+#     - type: entities
+#       entities:
+#         - input_select.dvbt_network_to_activate
+#         - script.dvbt_activate_network
+#         - input_text.neuer_standort_name
+#         - script.dvbt_scan_new_location
+#         - sensor.dvb_t_status
+#         - sensor.dvb_t_aktives_netzwerk
+#         - sensor.dvbt_senderanzahl
+#
+# HINWEIS Entity-IDs: HA leitet sie vom Kartennamen ab, nicht von unique_id -
+# "DVB-T Status" wird z.B. zu sensor.dvb_t_status, nicht sensor.dvbt_status.
+# Im Zweifel in Entwicklerwerkzeuge -> Zustaende nachschauen.
+#
+# Nutzung:
+#  - Zwischen bereits bekannten Standorten wechseln (schnell, kein Scan):
+#    input_select.dvbt_network_to_activate ist ein Dropdown, das sich
+#    automatisch aus den aktuell in TVHeadend vorhandenen DVB-T-Netzwerken
+#    befuellt - einfach auswaehlen und script.dvbt_activate_network ausloesen.
+#  - Komplett neuen Standort scannen (dauert ca. 10-15 Min):
+#    input_text.neuer_standort_name auf einen Ortsnamen setzen (OHNE
+#    "DVB-T "-Praefix, das wird automatisch ergaenzt), dann
+#    script.dvbt_scan_new_location ausloesen. Dasselbe Feld nutzt auch das
+#    DAB+ Package fuer script.dab_scan_new_location.
+#  - sensor.dvb_t_status.attributes.networks zeigt alle bekannten DVB-T-
+#    Netzwerke mit Name/aktiv/Anzahl Muxe/Services/Kanaele.
+#  - Sender aus dem aktiven Netzwerk ausschliessen oder umbenennen:
+#    input_select.dvbt_sender_auswahl zeigt die Sender des aktuell aktiven
+#    DVB-T-Netzwerks (aus sensor.dvb_t_sender_liste). Sender auswaehlen,
+#    dann script.dvbt_sender_ausschliessen / _einschliessen oder
+#    (mit vorher gesetztem input_text.dvbt_sender_neuer_name)
+#    script.dvbt_sender_umbenennen ausloesen. WICHTIG: anders als bei DAB+
+#    wirkt sich das nicht sofort aus, sondern erst beim naechsten Scan/
+#    Aktivieren dieses Standorts (DVB-T hat keinen periodischen Mapper-
+#    Lauf wie DAB+, siehe dvbt_bridge.py/map_unmapped_dvbt_services).
+#  - Kanalnummer/-name/-aktiviert direkt pflegen (SOFORTIGE Wirkung, kein
+#    Scan/Aktivieren noetig): input_select.dvbt_kanal_auswahl zeigt die
+#    Kanaele des aktiven Netzwerks (aus sensor.dvb_t_kanal_liste, inkl.
+#    deaktivierter Kanaele). Kanal auswaehlen - Name/Nummer werden
+#    automatisch vorbefuellt - anpassen, dann script.dvbt_kanal_umbenennen /
+#    _nummer_setzen / _aktivieren / _deaktivieren ausloesen. Deaktivierte
+#    Kanaele bleiben von selbst deaktiviert (kein automatischer Lauf setzt
+#    sie zurueck) und werden nie geloescht, auch wenn ihr Sender gerade
+#    nicht gefunden wird - siehe TVHEADEND_QUIRKS.md Punkt 11.
+
+rest_command:
+  dvbt_trigger_activate:
+    url: "http://192.168.0.200:8082/dvbt/activate?network={{ network | urlencode }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_scan_new_location:
+    url: "http://192.168.0.200:8082/dvbt/scan_new_location?name={{ name | urlencode }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_exclude:
+    url: "http://192.168.0.200:8082/dvbt/exclude?name={{ name | urlencode }}&excluded={{ excluded }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_rename:
+    url: "http://192.168.0.200:8082/dvbt/rename?raw_name={{ raw_name | urlencode }}&display_name={{ display_name | urlencode }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_delete_network:
+    url: "http://192.168.0.200:8082/dvbt/delete_network?network={{ network | urlencode }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_channel_number:
+    url: "http://192.168.0.200:8082/dvbt/channel_number?name={{ name | urlencode }}&number={{ number }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_channel_name:
+    url: "http://192.168.0.200:8082/dvbt/channel_name?name={{ name | urlencode }}&new_name={{ new_name | urlencode }}"
+    method: POST
+    timeout: 10
+  dvbt_trigger_channel_enabled:
+    url: "http://192.168.0.200:8082/dvbt/channel_enabled?name={{ name | urlencode }}&enabled={{ enabled }}"
+    method: POST
+    timeout: 10
+
+rest:
+  - resource: "http://192.168.0.200:8082/dvbt/status"
+    scan_interval: 15
+    sensor:
+      - name: "DVB-T Scan Status"
+        unique_id: dvbt_status
+        value_template: >-
+          {% if value_json.running %}scanning
+          {%- elif value_json.returncode == 0 %}idle
+          {%- elif value_json.returncode is not none %}error
+          {%- else %}unbekannt
+          {%- endif %}
+        json_attributes:
+          - running
+          - returncode
+          - active_network
+          - networks
+          - log_tail
+      - name: "DVB-T Aktiver Standort"
+        unique_id: dvbt_active_network
+        value_template: "{{ value_json.active_network or 'keins' }}"
+  - resource: "http://192.168.0.200:8082/dvbt/services"
+    scan_interval: 30
+    sensor:
+      - name: "DVB-T Sender Liste"
+        unique_id: dvbt_sender_liste
+        value_template: "{{ value_json.stations | length }}"
+        unit_of_measurement: "Sender"
+        json_attributes:
+          - stations
+  - resource: "http://192.168.0.200:8082/dvbt/channels"
+    scan_interval: 30
+    sensor:
+      - name: "DVB-T Kanal Liste"
+        unique_id: dvbt_kanal_liste
+        value_template: "{{ value_json.channels | length }}"
+        unit_of_measurement: "Kanaele"
+        json_attributes:
+          - channels
+
+input_select:
+  dvbt_network_to_activate:
+    name: "DVB-T gespeicherter Standort"
+    options:
+      - "(noch keine geladen)"
+  dvbt_sender_auswahl:
+    name: "DVB-T Sender auswaehlen"
+    options:
+      - "(noch keine geladen)"
+  dvbt_kanal_auswahl:
+    name: "DVB-T Kanal auswaehlen"
+    options:
+      - "(noch keine geladen)"
+
+input_text:
+  dvbt_sender_neuer_name:
+    name: "DVB-T Sender: neuer Anzeigename"
+    initial: ""
+  dvbt_kanal_neuer_name:
+    name: "DVB-T Kanal: neuer Name"
+    initial: ""
+
+input_number:
+  dvbt_kanal_neue_nummer:
+    name: "DVB-T Kanal: neue Nummer"
+    min: 0
+    max: 9999
+    step: 1
+    mode: box
+
+template:
+  - sensor:
+      - name: "DVB-T Senderanzahl"
+        unique_id: dvbt_senderanzahl
+        unit_of_measurement: "Kanaele"
+        state: >
+          {% set nets = state_attr('sensor.dvb_t_status', 'networks') or [] %}
+          {% set active = state_attr('sensor.dvb_t_status', 'active_network') %}
+          {% set match = nets | selectattr('name', 'eq', active) | list %}
+          {{ match[0].num_chn if match else 0 }}
+      - name: "DVB-T Sender Status (Auswahl)"
+        unique_id: dvbt_sender_status_auswahl
+        state: >
+          {% set sel = states('input_select.dvbt_sender_auswahl') %}
+          {% set stations = state_attr('sensor.dvb_t_sender_liste', 'stations') or [] %}
+          {% set match = stations | selectattr('raw_name', 'eq', sel) | list %}
+          {% if not match %}unbekannt
+          {%- elif match[0].excluded %}ausgeschlossen
+          {%- else %}aktiv ({{ match[0].display_name }})
+          {%- endif %}
+      - name: "DVB-T Kanal Status (Auswahl)"
+        unique_id: dvbt_kanal_status_auswahl
+        state: >
+          {% set sel = states('input_select.dvbt_kanal_auswahl') %}
+          {% set channels = state_attr('sensor.dvb_t_kanal_liste', 'channels') or [] %}
+          {% set match = channels | selectattr('name', 'eq', sel) | list %}
+          {% if not match %}unbekannt
+          {%- else %}Nr. {{ match[0].number }}, {{ 'aktiviert' if match[0].enabled else 'deaktiviert' }}
+          {%- endif %}
+
+script:
+  dvbt_activate_network:
+    alias: "DVB-T Standort aktivieren"
+    icon: mdi:antenna
+    sequence:
+      - action: rest_command.dvbt_trigger_activate
+        data:
+          network: "{{ states('input_select.dvbt_network_to_activate') }}"
+
+  dvbt_scan_new_location:
+    alias: "DVB-T neuen Standort scannen (ca. 5-8 Min)"
+    icon: mdi:antenna
+    sequence:
+      - action: rest_command.dvbt_trigger_scan_new_location
+        data:
+          name: "{{ states('input_text.neuer_standort_name') }}"
+
+  dvbt_delete_network:
+    alias: "DVB-T Standort loeschen"
+    icon: mdi:delete
+    sequence:
+      - action: rest_command.dvbt_trigger_delete_network
+        data:
+          network: "{{ states('input_select.dvbt_network_to_activate') }}"
+
+  dvbt_sender_ausschliessen:
+    alias: "DVB-T Sender ausschliessen"
+    icon: mdi:television-off
+    sequence:
+      - action: rest_command.dvbt_trigger_exclude
+        data:
+          name: "{{ states('input_select.dvbt_sender_auswahl') }}"
+          excluded: "true"
+
+  dvbt_sender_einschliessen:
+    alias: "DVB-T Sender wieder einschliessen"
+    icon: mdi:television
+    sequence:
+      - action: rest_command.dvbt_trigger_exclude
+        data:
+          name: "{{ states('input_select.dvbt_sender_auswahl') }}"
+          excluded: "false"
+
+  dvbt_sender_umbenennen:
+    alias: "DVB-T Sender umbenennen"
+    icon: mdi:rename
+    sequence:
+      - action: rest_command.dvbt_trigger_rename
+        data:
+          raw_name: "{{ states('input_select.dvbt_sender_auswahl') }}"
+          display_name: "{{ states('input_text.dvbt_sender_neuer_name') }}"
+
+  dvbt_kanal_umbenennen:
+    alias: "DVB-T Kanal umbenennen"
+    icon: mdi:rename
+    sequence:
+      - action: rest_command.dvbt_trigger_channel_name
+        data:
+          name: "{{ states('input_select.dvbt_kanal_auswahl') }}"
+          new_name: "{{ states('input_text.dvbt_kanal_neuer_name') }}"
+
+  dvbt_kanal_nummer_setzen:
+    alias: "DVB-T Kanalnummer setzen"
+    icon: mdi:pound
+    sequence:
+      - action: rest_command.dvbt_trigger_channel_number
+        data:
+          name: "{{ states('input_select.dvbt_kanal_auswahl') }}"
+          number: "{{ states('input_number.dvbt_kanal_neue_nummer') | int(0) }}"
+
+  dvbt_kanal_aktivieren:
+    alias: "DVB-T Kanal aktivieren"
+    icon: mdi:television
+    sequence:
+      - action: rest_command.dvbt_trigger_channel_enabled
+        data:
+          name: "{{ states('input_select.dvbt_kanal_auswahl') }}"
+          enabled: "true"
+
+  dvbt_kanal_deaktivieren:
+    alias: "DVB-T Kanal deaktivieren"
+    icon: mdi:television-off
+    sequence:
+      - action: rest_command.dvbt_trigger_channel_enabled
+        data:
+          name: "{{ states('input_select.dvbt_kanal_auswahl') }}"
+          enabled: "false"
+
+automation:
+  - alias: "DVB-T Netzwerk-Dropdown synchronisieren"
+    id: dvbt_sync_network_dropdown
+    triggers:
+      - platform: state
+        entity_id: sensor.dvb_t_status
+      - platform: homeassistant
+        event: start
+      - platform: time_pattern
+        minutes: "/10"
+    actions:
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.dvbt_network_to_activate
+        data:
+          options: >
+            {% set nets = (state_attr('sensor.dvb_t_status', 'networks') or [])
+                 | map(attribute='name') | list %}
+            {{ nets if nets else ["(noch keine geladen)"] }}
+
+  - alias: "DVB-T Sender-Dropdown synchronisieren"
+    id: dvbt_sync_sender_dropdown
+    triggers:
+      - platform: state
+        entity_id: sensor.dvb_t_sender_liste
+      - platform: homeassistant
+        event: start
+      - platform: time_pattern
+        minutes: "/10"
+    actions:
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.dvbt_sender_auswahl
+        data:
+          options: >
+            {% set names = (state_attr('sensor.dvb_t_sender_liste', 'stations') or [])
+                 | map(attribute='raw_name') | list %}
+            {{ names if names else ["(noch keine geladen)"] }}
+
+  - alias: "DVB-T Sender: Anzeigename vorbefuellen"
+    id: dvbt_prefill_sender_name
+    triggers:
+      - platform: state
+        entity_id: input_select.dvbt_sender_auswahl
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.dvbt_sender_neuer_name
+        data:
+          value: >
+            {% set sel = states('input_select.dvbt_sender_auswahl') %}
+            {% set stations = state_attr('sensor.dvb_t_sender_liste', 'stations') or [] %}
+            {% set match = stations | selectattr('raw_name', 'eq', sel) | list %}
+            {{ match[0].display_name if match else sel }}
+
+  - alias: "DVB-T Kanal-Dropdown synchronisieren"
+    id: dvbt_sync_kanal_dropdown
+    triggers:
+      - platform: state
+        entity_id: sensor.dvb_t_kanal_liste
+      - platform: homeassistant
+        event: start
+      - platform: time_pattern
+        minutes: "/10"
+    actions:
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.dvbt_kanal_auswahl
+        data:
+          options: >
+            {% set names = (state_attr('sensor.dvb_t_kanal_liste', 'channels') or [])
+                 | map(attribute='name') | list %}
+            {{ names if names else ["(noch keine geladen)"] }}
+
+  - alias: "DVB-T Kanal: Name und Nummer vorbefuellen"
+    id: dvbt_prefill_kanal_felder
+    triggers:
+      - platform: state
+        entity_id: input_select.dvbt_kanal_auswahl
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.dvbt_kanal_neuer_name
+        data:
+          value: "{{ states('input_select.dvbt_kanal_auswahl') }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.dvbt_kanal_neue_nummer
+        data:
+          value: >
+            {% set sel = states('input_select.dvbt_kanal_auswahl') %}
+            {% set channels = state_attr('sensor.dvb_t_kanal_liste', 'channels') or [] %}
+            {% set match = channels | selectattr('name', 'eq', sel) | list %}
+            {{ match[0].number if match else 0 }}

@@ -1,0 +1,12 @@
+[Unit]
+Description=DVB-T TVHeadend network-switch bridge
+After=network.target service.tvheadend43.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /storage/dab-tvh-bridge/dvbt_bridge.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=kodi.target

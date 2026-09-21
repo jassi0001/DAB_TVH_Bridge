@@ -1,0 +1,9 @@
+# DVB-T channel exclude list - one name (or partial name) per line.
+# Case-insensitive substring match against the broadcast service name, so
+# "QVC" also catches "QVC 2 HD". Matching services are disabled and left
+# unmapped (not deleted). "(Internet)" simulcast feeds are excluded
+# automatically and don't need to be listed here.
+QVC
+Bibel TV
+HSE24
+Handystar TV

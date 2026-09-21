@@ -1,0 +1,4 @@
+# DAB+ station names to leave out of the channel list entirely.
+# One exact name per line (matched against the name AFTER renames.txt is
+# applied), '#' comments allowed. Not currently in use on this box - copy to
+# exclude.txt on the box and list whatever you don't want.

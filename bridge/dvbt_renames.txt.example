@@ -1,0 +1,13 @@
+# DVB-T channel rename map - one "raw (tidied) channel name = display name"
+# per line, case-insensitive match on the left side. Applied after every
+# mapping pass, so it also fixes channels mapped before an entry was added.
+# The raw name is what TVHeadend's mapper produces AFTER its own tidying
+# (HD/regional suffixes etc already stripped) - check the current name in
+# the TVHeadend UI or via GET /dvbt/status if a rename below doesn't match.
+#
+# CAUTION: pick a target name that doesn't collide with an unrelated
+# channel that already has it (e.g. a DVB-T TV regional feed vs. an
+# unrelated radio station of a similar name) - the mapper does not merge
+# or warn on a collision, it just leaves two channels with the same name.
+NDR FS NDS HD = NDR FS Niedersachsen
+NDR FS NDS = NDR FS Niedersachsen

@@ -1,0 +1,154 @@
+# Auszug aus dem Lovelace-Dashboard: nur die DAB+/DVB-T-relevanten Karten
+# aus dem "Media"-Tab (persoenliche/unrelated Karten wie der Media-Player
+# selbst sind hier bewusst weggelassen). Als eigene View oder in eine
+# bestehende View einfuegen.
+
+cards:
+  - type: tile
+    entity: sensor.dab_scan_status
+    name: DAB+ Scan Status
+  - type: tile
+    entity: sensor.tvheadend_dab_kanaele
+  - type: tile
+    entity: sensor.dab_senderanzahl
+  - type: tile
+    entity: sensor.dab_aktiver_standort
+    name: DAB+ Aktiver Standort
+  - type: entities
+    title: DAB+ Empfang (live)
+    entities:
+      - entity: sensor.dab_ensemble
+        name: Ensemble
+      - entity: sensor.dab_tuner_lock
+        name: Tuner
+      - entity: sensor.dab_aktueller_sender
+        name: Aktueller Sender
+  - type: entities
+    title: DAB+ Standort aktivieren
+    entities:
+      - entity: input_select.dab_location_to_activate
+        name: Gespeicherter Standort
+  - type: button
+    entity: script.dab_activate_location
+    name: DAB+ Standort aktivieren
+    icon: mdi:radio-tower
+  - type: button
+    entity: script.dab_delete_location
+    name: DAB+ Standort loeschen
+    icon: mdi:delete
+    tap_action:
+      action: call-service
+      service: script.turn_on
+      target:
+        entity_id: script.dab_delete_location
+      confirmation:
+        text: "Ausgewaehlten DAB+-Standort wirklich loeschen? Das kann nicht rueckgaengig gemacht werden."
+  - type: tile
+    entity: sensor.dvb_t_status
+    name: DVB-T Scan Status
+  - type: tile
+    entity: sensor.dvb_t_aktives_netzwerk
+    name: DVB-T Aktiver Standort
+  - type: tile
+    entity: sensor.dvb_t_senderanzahl
+    name: DVB-T Senderanzahl
+  - type: entities
+    title: DVB-T Standort aktivieren
+    entities:
+      - entity: input_select.dvbt_network_to_activate
+        name: Gespeicherter Standort
+  - type: button
+    entity: script.dvbt_activate_network
+    name: DVB-T Standort aktivieren
+    icon: mdi:antenna
+  - type: button
+    entity: script.dvbt_delete_network
+    name: DVB-T Standort loeschen
+    icon: mdi:delete
+    tap_action:
+      action: call-service
+      service: script.turn_on
+      target:
+        entity_id: script.dvbt_delete_network
+      confirmation:
+        text: "Ausgewaehltes DVB-T-Netzwerk wirklich loeschen? Das kann nicht rueckgaengig gemacht werden."
+  - type: entities
+    title: Neuer Standort (fuer DAB+ und DVB-T gemeinsam)
+    entities:
+      - entity: input_text.neuer_standort_name
+        name: Ortsname
+  - type: button
+    entity: script.dab_scan_new_location
+    name: DAB+ neuen Standort scannen (ca. 2-3 Min)
+    icon: mdi:radio-tower
+  - type: button
+    entity: script.dvbt_scan_new_location
+    name: DVB-T neuen Standort scannen (ca. 5-8 Min)
+    icon: mdi:antenna
+  - type: entities
+    title: DAB+ Sender verwalten
+    entities:
+      - entity: input_select.dab_sender_auswahl
+        name: Sender auswaehlen
+      - entity: sensor.dab_sender_status_auswahl
+        name: Status
+      - entity: input_text.dab_sender_neuer_name
+        name: Neuer Anzeigename
+      - entity: script.dab_sender_ausschliessen
+        name: Ausschliessen
+        icon: mdi:radio-off
+      - entity: script.dab_sender_einschliessen
+        name: Einschliessen
+        icon: mdi:radio
+      - entity: script.dab_sender_umbenennen
+        name: Umbenennen
+        icon: mdi:rename
+  - type: entities
+    title: DVB-T Sender verwalten (aktives Netzwerk)
+    entities:
+      - entity: input_select.dvbt_sender_auswahl
+        name: Sender auswaehlen
+      - entity: sensor.dvb_t_sender_status_auswahl
+        name: Status
+      - entity: input_text.dvbt_sender_neuer_name
+        name: Neuer Anzeigename
+      - entity: script.dvbt_sender_ausschliessen
+        name: Ausschliessen
+        icon: mdi:television-off
+      - entity: script.dvbt_sender_einschliessen
+        name: Einschliessen
+        icon: mdi:television
+      - entity: script.dvbt_sender_umbenennen
+        name: Umbenennen
+        icon: mdi:rename
+  - type: entities
+    title: DVB-T Kanal verwalten (Nummer/Name/Aktiviert, sofortige Wirkung)
+    entities:
+      - entity: input_select.dvbt_kanal_auswahl
+        name: Kanal auswaehlen
+      - entity: sensor.dvb_t_kanal_status_auswahl
+        name: Status
+      - entity: input_text.dvbt_kanal_neuer_name
+        name: Neuer Name
+      - entity: script.dvbt_kanal_umbenennen
+        name: Namen setzen
+        icon: mdi:rename
+      - entity: input_number.dvbt_kanal_neue_nummer
+        name: Neue Nummer
+      - entity: script.dvbt_kanal_nummer_setzen
+        name: Nummer setzen
+        icon: mdi:pound
+      - entity: script.dvbt_kanal_aktivieren
+        name: Aktivieren
+        icon: mdi:television
+      - entity: script.dvbt_kanal_deaktivieren
+        name: Deaktivieren
+        icon: mdi:television-off
+
+#
+# WICHTIG bei eigener Anpassung: Home Assistant leitet die Entity-ID von
+# REST-Sensoren/Automatisierungen vom Anzeigenamen ab, nicht von unique_id -
+# z.B. wird "DVB-T Status" zu sensor.dvb_t_status (Bindestrich -> "_t_").
+# Nach Aenderungen an "name:"-Feldern in den Packages immer unter
+# Entwicklerwerkzeuge -> Zustaende nachschauen, wie die Entity wirklich
+# heisst, statt vom Namen auszugehen.
