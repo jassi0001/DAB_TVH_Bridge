@@ -206,7 +206,7 @@ Herkunft von `/storage/picons/` (z.B. per USB-Stick kopiert oder von einem
 Picon-Repository heruntergeladen) ist im aktuellen Boxzustand nicht mehr
 eindeutig nachvollziehbar.
 
-## 4. Live-Signalqualität/Ensemble-Info per SDK, und warum Now-Playing/DLS nicht funktioniert
+## 4. Live-Signalqualität/Ensemble-Info per SDK, Now-Playing, und Cover-Art (MOT Slideshow)
 
 Sundtek liefert unter `/storage/dabplus/opt/include/` (`mcsimple.h`,
 `mediaclient.h`, `mediacmds.h`) und `/storage/dabplus/opt/lib/libmcsimple.so`
@@ -215,6 +215,8 @@ der Box nötig - Python `ctypes` kann die exportierten Funktionen
 (`net_open`, `net_ioctl`, `net_close`, alle `EXPORT`-markiert) direkt gegen
 die `.so`-Datei aufrufen, keine besonderen Abhängigkeiten (`ldd` zeigt nur
 Standard-Systembibliotheken, kein `LD_LIBRARY_PATH` nötig).
+
+### 4.1 Signalqualität/Ensemble-Info (SDK, direkt per ctypes)
 
 **Funktioniert zuverlässig, live bestätigt** (siehe
 `bridge/dab_bridge.py:get_dab_signal_info()`, Endpunkt `/dab/signal`):
@@ -232,39 +234,133 @@ nicht mehr öffnen; nur die zuletzt angelegte funktioniert. Deshalb probiert
 Die eigentliche Hardware-Kommunikation von `mediasrv` läuft ohnehin über ein
 rohes USB-Gerät (`/dev/sundtek/usb/...`), nicht über diese virtuellen Nodes.
 
-**Funktioniert NICHT, ausführlich getestet**: `DAB_GET_DIGITAL_SERVICE_DATA`
-(119), das laut SDK-Header Dynamic-Label-Text (Songtitel/Interpret) liefern
-soll. Getestet mit echtem, aktivem Stream (u.a. SUNSHINE LIVE, die
-garantiert DLS sendet), mit und ohne vorherigem `DAB_SET_FREQUENCY`+`sid`
-im selben `ctypes`-Prozess - immer ein leeres Ergebnis (`status=0, len=0`).
-Per `media_set_loglevel("max")` (ebenfalls SDK-exportiert) aktiviertes
-Server-Logging (`/var/log/mediasrv.log`) zeigte beim echten HTTP-Stream-
-Request klare Einträge (`DAB SET FREQUENCY`, `Tuning Service ID`, `Unmute
-Audio`) - aber **keine einzige Zeile** für die eigenen
-`DAB_GET_DIGITAL_SERVICE_DATA`-Aufrufe, selbst während eines aktiven
-Streams. Das zeigt: der eigene `ctypes`-Client erreicht offenbar nicht
-denselben serverseitigen Codepfad wie ein "echter" Client (z.B. weil
-`mediaclient`/die Stream-HTTP-Schnittstelle ein anderes, nicht
-dokumentiertes Protokoll-Detail beim Öffnen der Session mitschickt). Ein
-`gdb`-Trace direkt gegen den laufenden `mediasrv`-Prozess (safe nur bei
-inaktivem Stream, sauber wieder `detach`t) bestätigte: kein `ioctl`-Aufruf
-mit Request 119 im Server während eines Streams messbar. Auch das
-`--getdigitaldata`-Flag, auf das ein Forenbeitrag verwies, existiert in der
-installierten `mediaclient`-Version (Build `2026-06-25`, per
-`media_build_version()` ausgelesen) nachweislich nicht (komplette
-315-zeilige `--help`-Ausgabe durchsucht, null Treffer).
+**Was ist ein guter SNR-Wert?** Keine offizielle Kalibrierungs-Doku von
+Sundtek für dieses Feld gefunden - es ist unklar, ob es sich um echtes,
+kalibriertes dB handelt oder um einen rohen internen Treiberwert. Empirisch
+auf dieser Box beobachtet: `snr≈17` → sauberer, vollständiger
+Slideshow-Empfang (RTL RADIO); `snr≈6-7` → durchgehend beschädigte/
+unvollständige Slideshow-Bilder (ANTENNE NDS, ffn). Allerdings: diese
+schwachen Messungen fielen zeitlich mit einem laufenden TVHeadend-Mux-Scan
+zusammen (siehe Abschnitt 4.4) - der Tuner war also mutmaßlich zusätzlich
+durch den Scan blockiert, nicht zwingend nur durch schwachen Empfang. Die
+Zahlen sind also ein Anhaltspunkt, keine verlässliche Kalibrierung. Für
+DAB/DAB+ allgemein gilt in der Fachliteratur grob: unter ~5 dB C/N =
+Aussetzer/kein Empfang, ~8-12 dB = brauchbar, >15 dB = komfortabel stabil -
+deckt sich grob mit dem hier beobachteten Muster.
 
-**Lösung für "was läuft gerade"**: nicht vom Tuner/SDK, sondern direkt aus
-TVHeadends eigener `/api/status/subscriptions` gelesen - TVHeadend weiß
-ohnehin exakt, welcher Kanal an welchen Client gestreamt wird, da es die
-Subscription selbst verwaltet. Live bestätigt (`GET /dab/now_playing`,
+### 4.2 Now-Playing (welcher Sender läuft gerade)
+
+**Nicht** vom Tuner/SDK gelesen, sondern direkt aus TVHeadends eigener
+`/api/status/subscriptions` - TVHeadend weiß ohnehin exakt, welcher Kanal an
+welchen Client gestreamt wird, da es die Subscription selbst verwaltet.
+Live bestätigt (`GET /dab/now_playing`,
 `bridge/dab_bridge.py:get_dab_now_playing()`): korrekt `["Schwarzwaldradio"]`
-während eines echten Streams, `[]` im Leerlauf.
+während eines echten Streams, `[]` im Leerlauf. Grund: ein eigener
+`ctypes`-Client, der versucht den aktuell getunten Service selbst
+auszulesen, bekommt keinen zuverlässigen Wert (siehe 4.3 für dieselbe
+Grundproblematik bei den Digital-Service-Daten) - TVHeadends eigene
+Buchführung ist die einzige robuste Quelle.
 
-**Einordnung**: dieser SDK-Weg wird bewusst nur für read-only
-Zusatzinformationen genutzt (Signalqualität, Ensemble-Name), die die
-HTTP-API gar nicht anbietet - alles, was der Rest des Projekts ohnehin
-schon zuverlässig über die HTTP-`cmd=`-API und die dokumentierten
+### 4.3 Cover-Art (MOT Slideshow) - funktioniert; DLS (Songtitel) - funktioniert nicht
+
+**Korrektur einer früheren, falschen Annahme in dieser Doku**: hier stand
+zuvor, `mediaclient --getdigitaldata` existiere nicht (angeblich keine
+Treffer in der `--help`-Ausgabe). Das war falsch - der Befehl existiert und
+funktioniert, ist nur aus unbekanntem Grund nicht in `--help` dokumentiert.
+Aufruf: `mediaclient --getdigitaldata -d <device>` (z.B. `/dev/dab13`) - ein
+**langlaufender Poll-Befehl**, kein One-Shot.
+
+**Live bestätigt über mehrere Sender und lange Testfenster**:
+- **MOT Slideshow (Cover-Bilder) funktioniert zuverlässig.** `mediaclient`
+  schreibt dekodierte JPEGs nach `/tmp/<n>.JPG` und meldet `"OPENED:
+  <pfad>"`, sobald es eine neue Datei zu schreiben beginnt.
+- **DLS (Songtitel/Interpret) funktioniert dagegen nie**, weder über die
+  CLI noch über den direkten SDK-Weg:
+  - CLI-Ausgabe zeigte über mehrere Sender und lange Aufnahmefenster
+    ausschließlich `data_group_type: 3` (MOT-Header) und `4` (MOT-Body),
+    nie den DLS-Typ.
+  - Direkter Test per `ctypes`/`DAB_GET_DIGITAL_SERVICE_DATA` (119)
+    bestätigt dasselbe auf niedrigerer Ebene: das `type`-Feld der
+    zurückgegebenen Struktur ist konstant `2` (MOT), nie `1` (DLS) - auch
+    bei exklusivem Gerätezugriff (kein konkurrierender Prozess) und sehr
+    hoher Poll-Rate (~19.000 Polls/Sekunde).
+  - **Externe Bestätigung**: laut einem Discord-Beitrag, den der Nutzer
+    gefunden hat, ist das DLS-Parsing in `mediaclient` aktuell auf
+    Sundtek-Seite pausiert/deaktiviert - das deckt sich exakt mit dem hier
+    beobachteten Verhalten. Es gibt dazu bereits eine offene Anfrage im
+    Sundtek-Forum; sobald ein zukünftiger `mediaclient`-Build DLS wieder
+    liefert, ist `_digitaldata_reader()` in `bridge/dab_bridge.py` die
+    Stelle, an der das Parsing ergänzt werden muss (siehe TODO-Kommentar
+    dort).
+- Installierte `mediaclient`-Version: Build `2026-06-25` (per
+  `media_build_version()`, SDK-exportiert, ausgelesen).
+
+**Zwei nicht-triviale Implementierungsprobleme, live gefunden und behoben**
+(siehe `bridge/dab_bridge.py`, Funktionen `digital_data_loop()`,
+`_digitaldata_reader()`, `_copy_artwork_when_stable()`):
+
+1. **glibc-Stdout-Pufferung**: `mediaclient`s eigenes stdout wird von glibc
+   blockweise gepuffert, wenn es kein TTY ist (Standardverhalten bei
+   `subprocess.PIPE`) - ein Reader-Thread bekam über die gesamte
+   Prozesslaufzeit **keine einzige Zeile** Output, obwohl der Prozess
+   nachweislich echte JPEG-Dateien schrieb. Lösung: `pty.openpty()`
+   verwenden und den Slave-fd als stdout/stderr übergeben - dadurch erkennt
+   `mediaclient` ein "interaktives Terminal" und schaltet auf
+   Zeilenpufferung um.
+2. **JPEG-Vollständigkeit**: MOT-Segmentdateien werden über mehrere Sekunden
+   inkrementell geschrieben. Ein zu früher Kopiervorgang direkt bei
+   `"OPENED:"` liefert nur ein ~500-Byte-Fragment. Auch "Größe ist seit N
+   Checks stabil" reichte allein nicht aus - live beobachtet, dass eine
+   "stabile" Datei trotzdem den EOI-Marker am Ende fehlte. Endgültige
+   Lösung: sowohl SOI (`\xff\xd8`, erste 2 Bytes) als auch EOI (`\xff\xd9`,
+   letzte 2 Bytes) prüfen, mit einem kurzen Retry, bevor eine Datei als
+   vollständig akzeptiert wird.
+3. **Timeout-Budget zu knapp für große Bilder**: das ursprüngliche Budget
+   (`checks=4, interval=1.5s, max_attempts=20`, ~30s) war für Sender mit
+   größeren Slideshow-Bildern zu kurz - live beobachtet (Sender "ffn"): eine
+   Datei wuchs noch bei Sekunde 36 linear über 24 KB, war also bei Weitem
+   nicht fertig. Das ursprüngliche 30s-Budget verwarf dadurch **jedes
+   einzelne** Slide dieses Senders, unbemerkt. Behoben durch Erhöhung auf
+   `checks=4, interval=2.0s, max_attempts=90` (~3 Min. Budget).
+
+**Architektur** (`bridge/dab_bridge.py:digital_data_loop()`): läuft als
+Hintergrund-Thread, pollt `get_dab_now_playing()` alle 5s und hält genau
+einen `mediaclient --getdigitaldata`-Prozess am Leben, solange ein Sender
+läuft - neu gestartet bei Senderwechsel, komplett gestoppt im Leerlauf.
+Ein Senderwechsel wird erst nach **zwei aufeinanderfolgenden** übereinstim-
+menden Polls akzeptiert (Entprellung) - ein einzelner, transienter
+TVHeadend-Subscription-Ausreißer reichte in Tests aus, um einen laufenden
+Capture-Vorgang grundlos neu zu starten und ein bereits fertig geladenes
+Bild wegzuwerfen.
+
+### 4.4 TVHeadend-eigener Mux-Scan läuft nach dem eigenen Scan-Skript weiter
+
+Wichtig für alles, was den Tuner direkt anspricht (SDK-Frequenz-Sweeps,
+Signalqualitäts-Vergleiche etc.): der von `bridge/dab_bridge.py`
+ausgelöste Scan-Lauf (`/dab/status` → `running: false`, `returncode: 0`)
+bedeutet **nicht**, dass der Tuner wieder frei ist. TVHeadend arbeitet nach
+einem (Neu-)Scan seine eigene Mux-Scan-Queue im Hintergrund weiter ab -
+`scan_state` pro Mux (`/api/mpegts/mux/grid`, bzw. Feld-Enum über
+`/api/mpegts/mux/class`): `0`=INAKTIV (fertig), `1`=AUSSTEHEND (wartet in
+der Queue), `2`=IDLE PEND, `3`=AKTIV (wird gerade gescannt). Live
+beobachtet: direkt nach einem abgeschlossenen Standort-Scan standen noch
+>25 DAB+-Muxe auf `AUSSTEHEND` und einer auf `AKTIV` - der Tuner war also
+noch minutenlang weiter beschäftigt.
+
+**Deshalb liefert `/dab/status` seit 2026-09-21 zusätzliche Felder**:
+`tvh_mux_scan_pending`, `tvh_mux_scan_active` und der zusammengefasste
+Bool `tvh_scanning` - jeder Code, der den Tuner direkt (per SDK/ctypes)
+anspricht, sollte vorher `tvh_scanning: false` prüfen, nicht nur den
+eigenen `running`-Status. Der HA-Sensor `sensor.dab_scan_status` wertet
+das bereits mit aus (Zustand `scanning`, solange `running` **oder**
+`tvh_scanning` wahr ist).
+
+### 4.5 Einordnung
+
+Dieser SDK-Weg (Abschnitte 4.1-4.3) wird bewusst nur für Zusatz-
+informationen genutzt, die die HTTP-`cmd=`-API gar nicht anbietet
+(Signalqualität, Ensemble-Name, Cover-Art) - alles, was der Rest des
+Projekts ohnehin schon zuverlässig über die HTTP-API und die dokumentierten
 Service-Neustarts löst (Scan auslösen, Senderliste holen), bleibt bewusst
 dabei. Siehe [ARCHITECTURE.md](ARCHITECTURE.md), Abschnitt "Home Assistant
 Integration", für die Einordnung, warum keine generelle Umstellung auf

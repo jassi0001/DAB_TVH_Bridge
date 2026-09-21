@@ -84,7 +84,7 @@ rest:
       - name: "DAB+ Scan Status"
         unique_id: dab_scan_status
         value_template: >-
-          {% if value_json.running %}scanning
+          {% if value_json.running or value_json.tvh_scanning %}scanning
           {%- elif value_json.returncode == 0 %}idle
           {%- elif value_json.returncode is not none %}error
           {%- else %}unbekannt
@@ -94,6 +94,9 @@ rest:
           - returncode
           - station_count
           - tvheadend_muxes
+          - tvh_mux_scan_pending
+          - tvh_mux_scan_active
+          - tvh_scanning
           - active_location
           - locations
           - log_tail
@@ -139,6 +142,27 @@ rest:
       - name: "DAB+ Aktueller Sender"
         unique_id: dab_now_playing
         value_template: "{{ value_json.playing | join(', ') if value_json.playing else 'nichts aktiv' }}"
+  - resource: "http://192.168.0.200:8081/dab/artwork_info"
+    scan_interval: 10
+    sensor:
+      - name: "DAB+ Sender Cover Status"
+        unique_id: dab_artwork_status
+        value_template: >-
+          {% if not value_json.available %}kein Cover
+          {%- else %}verfuegbar ({{ value_json.channel }})
+          {%- endif %}
+        json_attributes:
+          - available
+          - updated_at
+          - channel
+
+# HINWEIS: sowohl "camera: platform: generic" als auch "image: platform:
+# generic" sind in dieser HA-Version (2026.9.3) reine UI-Config-Flow-
+# Integrationen - YAML-Konfiguration schlaegt fehl (camera: legt die
+# Entity gar nicht erst an, image: wirft sogar einen klaren Fehler "No
+# module named ...generic.image"). Deshalb kein Entity fuer das Cover-Bild,
+# stattdessen direkt eine Markdown-Karte mit gejinja-tem Cache-Busting im
+# Dashboard - siehe dashboards/wohnwagen.yaml.
 
 input_select:
   dab_location_to_activate:

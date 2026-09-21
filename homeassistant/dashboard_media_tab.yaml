@@ -23,6 +23,14 @@ cards:
         name: Tuner
       - entity: sensor.dab_aktueller_sender
         name: Aktueller Sender
+      - entity: sensor.dab_sender_cover_status
+        name: Cover Status
+  - type: markdown
+    content: >
+      ### DAB+ Sender Cover
+
+      ![DAB+ Sender Cover](http://192.168.0.200:8081/dab/artwork?t={{
+      state_attr('sensor.dab_sender_cover_status', 'updated_at') }})
   - type: entities
     title: DAB+ Standort aktivieren
     entities:

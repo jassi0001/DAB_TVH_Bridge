@@ -10,7 +10,7 @@ LibreELEC-Box) angegeben, in deinem Netz entsprechend anpassen.
 |---|---|---|
 | `/DAB_mp2.m3u` | GET | M3U-Playlist mit `pipe://ffmpeg ...`-Kommandos pro Sender (für TVHeadends IPTV-Netzwerk) |
 | `/DAB_plain.m3u` | GET | M3U-Playlist mit rohen Stream-URLs (z.B. für VLC direkt) |
-| `/dab/status` | GET | `{running, returncode, station_count, tvheadend_muxes, active_location, locations, log_tail}` |
+| `/dab/status` | GET | `{running, returncode, station_count, tvheadend_muxes, tvh_mux_scan_pending, tvh_mux_scan_active, tvh_scanning, active_location, locations, log_tail}` - `tvh_scanning` (seit 2026-09-21) fasst TVHeadends eigene Mux-Scan-Queue zusammen (siehe [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4.4): `running: false` allein heißt nicht, dass der Tuner wieder frei ist, TVHeadend kann seine eigene Queue noch minutenlang weiter abarbeiten |
 | `/dab/locations` | GET | Liste gespeicherter Standorte `[{name, station_count, saved_at}, ...]` |
 | `/dab/rescan` | POST | Live-Scan, kein Standort wird gespeichert, setzt aktiven Standort zurück auf "live" |
 | `/dab/scan_new_location?name=<Ort>` | POST | Live-Scan, Ergebnis unter `<Ort>` speichern und aktivieren |
@@ -21,6 +21,8 @@ LibreELEC-Box) angegeben, in deinem Netz entsprechend anpassen.
 | `/dab/delete_location?name=<Ort>` | POST | Gespeicherten Standort unwiderruflich löschen (löscht nur die lokale JSON-Datei, kein TVHeadend-Zugriff); war es der aktive Standort, fällt der aktive Standort auf "live" zurück; `{"deleted": true\|false}`, 404 falls unbekannt |
 | `/dab/signal` | GET | `{device, locked, rssi, snr, fic_quality, cnr, ensemble}` - Live-Tuner-/Ensemble-Info, direkt über Sundteks SDK (`libmcsimple.so`) gelesen statt über die HTTP-API, die das nicht anbietet. Siehe [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4 für Details und Grenzen dieses Wegs (insbesondere: kein Now-Playing/DLS-Songtitel möglich) |
 | `/dab/now_playing` | GET | `{"playing": [<Kanalname>, ...]}` - aktuell tatsächlich gestreamte(r) DAB+-Kanal/-Kanäle, direkt aus TVHeadends eigener `/api/status/subscriptions` gelesen (nicht vom Tuner/SDK - dort ließ sich das nicht zuverlässig auslesen, siehe oben) |
+| `/dab/artwork_info` | GET | `{available, updated_at, channel}` - Status des zuletzt erfolgreich erfassten Cover-Bilds (MOT Slideshow) für den aktuell laufenden Sender. Siehe [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4.3 |
+| `/dab/artwork` | GET | Rohes JPEG des aktuellen Sender-Covers (`Content-Type: image/jpeg`, `Cache-Control: no-cache`), 404 falls (noch) keins vorhanden |
 
 `/rescan` und `/rescan/status` funktionieren weiterhin als Alias zu
 `/dab/rescan` bzw. `/dab/status` (Altlast aus einer früheren, noch nicht

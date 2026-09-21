@@ -220,3 +220,31 @@ wie in Punkt 5) sonst noch nicht zuverlässig sichtbar waren, wenn direkt im
 Anschluss erneut abgefragt wurde. Live-Test nach allen drei Fixes: 17 zuvor
 untaggte Kanäle bekamen beim nächsten `/dvbt/activate` korrekt ihr
 "TV channels"-Tag.
+
+## 12. TVHeadends eigene Mux-Scan-Queue läuft nach Abschluss des eigenen Scan-Skripts weiter
+
+Der von `bridge/dab_bridge.py` ausgelöste Scan-Lauf meldet über
+`/dab/status` `running: false, returncode: 0`, sobald das eigene Skript
+fertig ist (Sundtek-Scan abgewartet, TVHeadend neu gestartet). Das
+bedeutet aber **nicht**, dass der Tuner danach wieder frei ist: TVHeadend
+arbeitet nach einem Neustart seine eigene Mux-Scan-Queue eigenständig im
+Hintergrund weiter ab, ein Mux nach dem anderen. Live bestätigt
+(2026-09-21): direkt nach einem als "fertig" gemeldeten Standort-Scan
+("Example") standen laut `/api/mpegts/mux/grid` noch >25 DAB+-Muxe auf
+`scan_state=1` (AUSSTEHEND) und einer auf `scan_state=3` (AKTIV) - vom
+eigenen Skript aus nicht sichtbar, aber im TVHeadend-Web-UI unter "Muxe"
+klar erkennbar ("Suchergebnis"-Spalte).
+
+`scan_state`-Enum (per `/api/mpegts/mux/class`, Feld `scan_state`):
+`0`=INAKTIV, `1`=AUSSTEHEND, `2`=IDLE PEND, `3`=AKTIV.
+
+**Relevanz**: jeder Code, der den physischen Tuner direkt anspricht (z.B.
+ein SDK-/`ctypes`-Frequenz-Sweep zur Signalqualitätsmessung, siehe
+[SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4.1), konkurriert dabei
+mit TVHeadends eigenem Scan um denselben Tuner - beide Seiten stören sich
+gegenseitig, ohne dass eine Fehlermeldung entsteht (nur schlechte/
+unplausible Messwerte). **Fix**: `/dab/status` liefert seit diesem Fund
+zusätzlich `tvh_mux_scan_pending`, `tvh_mux_scan_active` und den
+zusammengefassten Bool `tvh_scanning` (siehe
+[API.md](API.md)) - vor jedem direkten Tuner-Zugriff sollte das geprüft
+werden, nicht nur der eigene `running`-Status.

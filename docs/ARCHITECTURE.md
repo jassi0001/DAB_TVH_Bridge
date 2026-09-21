@@ -201,16 +201,33 @@ Sundteks Low-Level-SDK (`libmcsimple.so`, siehe
 [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4)**: Der SDK-Zugriff
 funktioniert nachweislich für einfache, lesende Abfragen (Ensemble-Name,
 Tuner-Lock/Signalqualität, gezieltes Anwählen eines Senders per Frequenz+SID)
-- aber schon bei etwas Komplexerem (Dynamic-Label/Songtitel auslesen)
-zeigte sich, dass eigene SDK-Aufrufe nicht zuverlässig denselben
-serverseitigen Codepfad treffen wie ein "echter" Client. Die bestehende
-HTTP-`cmd=`-API plus der dokumentierte Service-Neustart-Workaround (Punkt 2
-in [TVHEADEND_QUIRKS.md](TVHEADEND_QUIRKS.md)) ist dagegen seit Projektstart
+und, über den `mediaclient`-Prozess (nicht den rohen `ctypes`-Weg), auch für
+Cover-Art (MOT Slideshow, siehe unten). Dynamic-Label/Songtitel (DLS)
+dagegen funktioniert aktuell mit keinem der beiden Wege - laut einem
+externen Hinweis (Sundtek-Discord) ist das DLS-Parsing in `mediaclient`
+derzeit selbst auf Sundtek-Seite pausiert, das ist also kein Bug in dieser
+Bridge. Die bestehende HTTP-`cmd=`-API plus der dokumentierte
+Service-Neustart-Workaround (Punkt 2 in
+[TVHEADEND_QUIRKS.md](TVHEADEND_QUIRKS.md)) ist seit Projektstart
 durchgehend zuverlässig. **Empfehlung**: bestehende, funktionierende
 Mechanismen (Scan auslösen, Senderliste holen) nicht auf das SDK umstellen
 - das SDK sich nur für echte Zusatzfunktionen holen, die die HTTP-API gar
-nicht bietet (z.B. `/dab/signal`, `/dab/now_playing` - Letzteres nutzt aber
-bewusst TVHeadends eigene Subscriptions-API statt des SDK, siehe dort).
+nicht bietet (z.B. `/dab/signal`, `/dab/now_playing`, `/dab/artwork` -
+`now_playing` nutzt dabei bewusst TVHeadends eigene Subscriptions-API statt
+des SDK, siehe dort).
+
+**Cover-Art (Sender-Logo/Album-Cover)**: die Bridge hält im Hintergrund
+genau einen `mediaclient --getdigitaldata`-Prozess für den gerade laufenden
+Sender am Leben, dekodiert dessen MOT-Slideshow-Ausgabe und stellt das
+aktuellste Bild unter `/dab/artwork` bereit. Da Home Assistant 2026.9.3
+`camera`/`image` mit `platform: generic` nur noch als UI-Config-Flow
+unterstützt (YAML-Konfiguration erzeugt keine bzw. eine fehlerhafte
+Entity), wird das Bild stattdessen über eine `type: markdown`-Lovelace-
+Karte mit gejinja-tem Cache-Busting eingebunden (siehe
+`homeassistant/dashboard_media_tab.yaml`). Details, inklusive zweier
+live gefundener und behobener Implementierungsfehler (stdout-Pufferung,
+JPEG-Vollständigkeitsprüfung), in
+[SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4.3.
 
 Zwei Packages ([homeassistant/packages/](../homeassistant/packages/)),
 bewusst nach demselben Muster gebaut:

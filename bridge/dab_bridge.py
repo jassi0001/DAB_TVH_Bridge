@@ -4,6 +4,7 @@ import ctypes
 import glob
 import json
 import os
+import pty
 import socket
 import subprocess
 import threading
@@ -27,6 +28,19 @@ MCSIMPLE_LIB = "/storage/dabplus/opt/lib/libmcsimple.so"
 DAB_GET_TUNER = 68
 DAB_HAS_LOCK = 0x01
 DAB_GET_ENSEMBLE_INFO = 128
+
+# Cover art / station logo (DAB+ "MOT Slideshow") capture. `mediaclient
+# --getdigitaldata` decodes this and any Dynamic Label (song title) text
+# broadcast on the currently selected service, writing decoded images to
+# /tmp/<n>.JPG - but as of the SDK build on this box (2026-06-25) it only
+# ever emits Slideshow images, never DLS text, even for stations confirmed
+# to broadcast both (see SUNDTEK_INSTALL.md Abschnitt 4 for the
+# investigation). Sundtek has an open forum inquiry about this; once a
+# future mediaclient build starts emitting DLS text too, _digitaldata_reader
+# below is where to add parsing for it - see the TODO in that function.
+MEDIACLIENT_BIN = "/storage/dabplus/opt/bin/mediaclient"
+DAB_ARTWORK_PATH = "/storage/dab-tvh-bridge/artwork.jpg"
+DIGITALDATA_POLL_SECONDS = 5
 FFMPEG_BIN = "ffmpeg"
 AUDIO_BITRATE = "192k"
 SERVICE_PROVIDER = "Radio channels"
@@ -235,11 +249,23 @@ def _get_mcsimple():
     return _mcsimple
 
 
+def _find_active_dab_device():
+    """/dev/dabN device nodes accumulate across scans/tunes (stale ones fail
+    to open) - the most recently touched one is the live one."""
+    lib = _get_mcsimple()
+    candidates = sorted(glob.glob("/dev/dab*"), key=lambda p: os.stat(p).st_mtime, reverse=True)
+    for device in candidates:
+        fd = lib.net_open(device.encode(), 0)
+        if fd >= 0:
+            lib.net_close(fd)
+            return device
+    return None
+
+
 def get_dab_signal_info():
     """Ensemble name + tuner lock/signal quality, read directly via the SDK
     (libmcsimple.so) rather than the HTTP API, which doesn't expose this at
-    all. /dev/dabN device nodes accumulate across scans/tunes (stale ones
-    fail to open) - try the most recently touched one first."""
+    all."""
     lib = _get_mcsimple()
     candidates = sorted(glob.glob("/dev/dab*"), key=lambda p: os.stat(p).st_mtime, reverse=True)
     for device in candidates:
@@ -268,11 +294,10 @@ def get_dab_signal_info():
 def get_dab_now_playing():
     """Which DAB+ channel(s) are currently being streamed, straight from
     TVHeadend's own subscription table - far more reliable than trying to
-    read the current service back off the tuner itself (the Sundtek SDK's
-    DAB_GET_DIGITAL_SERVICE_DATA/dynamic-label path never showed real data
-    in testing, see TVHEADEND_QUIRKS.md). TVHeadend already knows exactly
-    which channel each active client subscribed to, since it's the one that
-    set up the subscription - no separate tuner-state guessing needed."""
+    read the current service back off the tuner itself (see
+    SUNDTEK_INSTALL.md Abschnitt 4). TVHeadend already knows exactly which
+    channel each active client subscribed to, since it's the one that set up
+    the subscription - no separate tuner-state guessing needed."""
     with _tvh_req("/api/status/subscriptions") as resp:
         data = json.loads(resp.read())
     channels = sorted({
@@ -280,6 +305,198 @@ def get_dab_now_playing():
         if f"/{TVH_NETWORK_NAME}/" in (e.get("service") or "") and e.get("channel")
     })
     return {"playing": channels}
+
+
+_digitaldata_lock = threading.Lock()
+_digitaldata_proc = None
+_digitaldata_channel = None
+_artwork_updated_at = None
+_artwork_channel = None
+
+
+def _copy_artwork_when_stable(src, channel, checks=4, interval=2.0, max_attempts=90):
+    """Waits for `src` to stop growing before copying it - mediaclient
+    writes the file incrementally over several seconds as MOT body segments
+    arrive, so copying too early grabs a truncated/corrupt image. Live
+    tested: copying on "OPENED:" itself produced a ~500-byte fragment;
+    copying on the NEXT "OPENED:" line (implying the previous write must be
+    done) still produced a corrupt JPEG missing its header - only a genuine
+    size-stability check turned out to be reliable.
+
+    max_attempts is deliberately generous (~3 min budget) - image size (and
+    so transfer time) varies a lot by station. Live observed: some stations'
+    slideshow images are 5-10x larger than others (confirmed: one station's
+    image was still growing linearly past 24KB at the 36s mark, nowhere
+    near done) - the original 30s budget was simply too short and silently
+    discarded every single slide for that station, discovered only by
+    watching file sizes directly rather than trusting the "it times out
+    sometimes" assumption."""
+    last_size = -1
+    stable_count = 0
+    for _ in range(max_attempts):
+        time.sleep(interval)
+        try:
+            size = os.path.getsize(src)
+        except OSError:
+            return
+        if size == last_size and size > 0:
+            stable_count += 1
+            if stable_count >= checks:
+                break
+        else:
+            stable_count = 0
+        last_size = size
+    else:
+        return  # never stabilized within the time budget - skip this one
+
+    # Even a size-stable file can be a genuinely corrupt/truncated JPEG -
+    # live observed both ends of this: reception issues occasionally
+    # drop/garble the first MOT body segment (missing SOI marker), and even
+    # with that fixed, a file can still be missing its trailing EOI marker
+    # (truncated at the end - the stability check can be fooled by a pause
+    # between segment bursts that isn't actually completion). Checking both
+    # markers is what actually caught a truncated-but-"stable" file in
+    # testing. One short retry covers the "stability check ended just
+    # barely too early" case; if it's still bad after that, skip and wait
+    # for the next slide rather than serving a broken image to HA.
+    for attempt in range(2):
+        try:
+            with open(src, "rb") as f:
+                data = f.read()
+        except OSError:
+            return
+        if data[:2] == b"\xff\xd8" and data[-2:] == b"\xff\xd9":
+            break
+        if attempt == 0:
+            time.sleep(3)
+    else:
+        return
+
+    global _artwork_updated_at, _artwork_channel
+    try:
+        os.makedirs(os.path.dirname(DAB_ARTWORK_PATH), exist_ok=True)
+        with open(DAB_ARTWORK_PATH, "wb") as f:
+            f.write(data)
+        with _digitaldata_lock:
+            _artwork_updated_at = time.time()
+            _artwork_channel = channel
+    except OSError:
+        pass
+
+
+def _digitaldata_reader(master_fd, channel):
+    """Runs in its own thread for the lifetime of one `mediaclient
+    --getdigitaldata` process, reading its output line by line as it
+    arrives via a pty (see digital_data_loop() for why a plain pipe doesn't
+    work). Currently only handles the MOT Slideshow (cover art) lines it
+    actually emits - see the TODO below for where Dynamic Label (song
+    title) text would be parsed once a future mediaclient build supports it
+    (Sundtek has an open forum inquiry about this). Each "OPENED: <path>"
+    spawns its own stability-poll watcher (see _copy_artwork_when_stable)
+    rather than trying to time the copy off log lines alone."""
+    buf = b""
+    try:
+        while True:
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                break  # pty closed - process exited/was terminated
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                raw_line, buf = buf.split(b"\n", 1)
+                line = raw_line.decode(errors="replace").strip()
+                if line.startswith("OPENED: "):
+                    src = line[len("OPENED: "):].strip()
+                    threading.Thread(target=_copy_artwork_when_stable, args=(src, channel), daemon=True).start()
+                # TODO: once mediaclient starts emitting Dynamic Label (song
+                # title/artist) text again - currently it only ever emits MOT
+                # Slideshow data, never DLS, see SUNDTEK_INSTALL.md
+                # Abschnitt 4 - parse those lines here the same way and
+                # expose them via a new get_dab_now_playing_metadata()-style
+                # function/endpoint.
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+
+def digital_data_loop():
+    """Keeps exactly one `mediaclient --getdigitaldata` process attached to
+    the currently active DAB+ channel, for as long as something is actually
+    playing (get_dab_now_playing()) - restarted whenever the playing channel
+    changes so it re-syncs to the new station's slideshow, and stopped
+    entirely while idle so it doesn't hold the device open for nothing.
+
+    Requires two consecutive polls to agree on a "changed" channel before
+    acting on it - live testing showed a single spurious/transient read of
+    get_dab_now_playing() (TVHeadend subscription reporting blip) was enough
+    to trigger a restart mid-capture, throwing away an already-valid,
+    fully-downloaded slideshow image for no real reason."""
+    global _digitaldata_proc, _digitaldata_channel
+    pending_channel = None
+    while True:
+        try:
+            playing = get_dab_now_playing()["playing"]
+            channel = playing[0] if playing else None
+
+            if channel != _digitaldata_channel:
+                if pending_channel != channel:
+                    pending_channel = channel
+                    channel = _digitaldata_channel  # not confirmed yet - keep current state this round
+            else:
+                pending_channel = channel
+
+            if _digitaldata_proc is not None and channel != _digitaldata_channel:
+                _digitaldata_proc.terminate()
+                try:
+                    _digitaldata_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _digitaldata_proc.kill()
+                _digitaldata_proc = None
+                _digitaldata_channel = None
+                with _digitaldata_lock:
+                    _artwork_updated_at = None
+                    _artwork_channel = None
+                try:
+                    os.remove(DAB_ARTWORK_PATH)
+                except OSError:
+                    pass
+
+            if channel and _digitaldata_proc is None:
+                device = _find_active_dab_device()
+                if device:
+                    # mediaclient buffers its own stdout in big (~4KB+)
+                    # blocks when it isn't a TTY (standard glibc stdio
+                    # behaviour) - live tested: through a plain pipe, it ran
+                    # for its whole lifetime without ever flushing a single
+                    # "OPENED:" line to us, and a killed process never gets
+                    # to flush its buffer, so the output was lost entirely.
+                    # Giving it a pty instead makes it detect an
+                    # interactive terminal and switch to line-buffering.
+                    master_fd, slave_fd = pty.openpty()
+                    proc = subprocess.Popen(
+                        [MEDIACLIENT_BIN, "--getdigitaldata", "-d", device],
+                        stdout=slave_fd, stderr=slave_fd, stdin=subprocess.DEVNULL,
+                    )
+                    os.close(slave_fd)
+                    _digitaldata_proc = proc
+                    _digitaldata_channel = channel
+                    threading.Thread(target=_digitaldata_reader, args=(master_fd, channel), daemon=True).start()
+        except Exception as e:
+            print(f"[digitaldata] error: {e}")
+        time.sleep(DIGITALDATA_POLL_SECONDS)
+
+
+def get_dab_artwork_info():
+    with _digitaldata_lock:
+        return {
+            "available": os.path.exists(DAB_ARTWORK_PATH),
+            "updated_at": _artwork_updated_at,
+            "channel": _artwork_channel,
+        }
 
 
 def _latest_scan_prid():
@@ -447,10 +664,28 @@ def rescan_status():
         pass
 
     tvheadend_muxes = None
+    # TVHeadend's own mux scan_state: 0=INAKTIV (idle/done), 1=AUSSTEHEND
+    # (queued), 2=IDLE PEND, 3=AKTIV (scanning right now). After our own
+    # scan-trigger script finishes (returncode set, running=False), TVHeadend
+    # itself keeps working through its mux scan queue in the background for a
+    # while - each mux is scanned one at a time. Our own "running" flag only
+    # covers the scan-runner subprocess we launched, not this follow-up
+    # queue, so a caller who only checks "running" can wrongly conclude the
+    # tuner is free while TVHeadend is still actively retuning muxes. Live
+    # observed (2026-09-21): after a bridge-triggered scan already reported
+    # running=False/returncode=0, TVHeadend's own mux grid still showed
+    # dozens of DAB+ muxes at scan_state=1 (pending) and one at scan_state=3
+    # (actively retuning) - the tuner was still busy for a good while after
+    # our own script considered the job done.
+    tvh_mux_scan_pending = None
+    tvh_mux_scan_active = None
     try:
         with _tvh_req("/api/mpegts/mux/grid?limit=500", timeout=5) as resp:
             grid = json.loads(resp.read())
-        tvheadend_muxes = sum(1 for e in grid["entries"] if e.get("network") == TVH_NETWORK_NAME)
+        dab_muxes = [e for e in grid["entries"] if e.get("network") == TVH_NETWORK_NAME]
+        tvheadend_muxes = len(dab_muxes)
+        tvh_mux_scan_pending = sum(1 for e in dab_muxes if e.get("scan_state") in (1, 2))
+        tvh_mux_scan_active = sum(1 for e in dab_muxes if e.get("scan_state") == 3)
     except Exception:
         pass
 
@@ -459,6 +694,9 @@ def rescan_status():
         "returncode": returncode,
         "station_count": station_count,
         "tvheadend_muxes": tvheadend_muxes,
+        "tvh_mux_scan_pending": tvh_mux_scan_pending,
+        "tvh_mux_scan_active": tvh_mux_scan_active,
+        "tvh_scanning": bool((tvh_mux_scan_pending or 0) + (tvh_mux_scan_active or 0)),
         "active_location": _get_active_location(),
         "locations": list_locations(),
         "log_tail": tail,
@@ -754,6 +992,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 _send_json(self, 502, {"error": str(e)})
             return
+        if path == "/dab/artwork_info":
+            _send_json(self, 200, get_dab_artwork_info())
+            return
+        if path == "/dab/artwork":
+            if not os.path.exists(DAB_ARTWORK_PATH):
+                self.send_response(404)
+                self.end_headers()
+                return
+            with open(DAB_ARTWORK_PATH, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path not in ("/DAB_mp2.m3u", "/DAB_plain.m3u", "/"):
             self.send_response(404)
             self.end_headers()
@@ -843,4 +1098,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     threading.Thread(target=mapper_loop, daemon=True).start()
+    threading.Thread(target=digital_data_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
