@@ -94,6 +94,12 @@ rest:
           - returncode
           - station_count
           - tvheadend_muxes
+          - dab_scanning
+          - dab_scan_current_freq
+          - dab_scan_current_stations
+          - dab_last_scan_freq
+          - dab_last_scan_stations
+          - dab_last_scan_finished_at
           - tvh_mux_scan_pending
           - tvh_mux_scan_active
           - tvh_scanning

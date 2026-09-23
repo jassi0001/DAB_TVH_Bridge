@@ -108,6 +108,26 @@ rest:
       - name: "DVB-T Aktiver Standort"
         unique_id: dvbt_active_network
         value_template: "{{ value_json.active_network or 'keins' }}"
+  - resource: "http://192.168.0.200:8082/dvbt/signal"
+    scan_interval: 15
+    sensor:
+      - name: "DVB-T Empfang"
+        unique_id: dvbt_signal_status
+        value_template: >-
+          {% if not value_json.active %}kein aktiver Stream
+          {%- else %}aktiv
+          {%- endif %}
+        json_attributes:
+          - active
+          - stream
+          - signal
+          - signal_scale
+          - signal_db
+          - snr
+          - snr_scale
+          - snr_db
+          - ber
+          - unc
   - resource: "http://192.168.0.200:8082/dvbt/services"
     scan_interval: 30
     sensor:

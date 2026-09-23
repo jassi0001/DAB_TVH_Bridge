@@ -323,6 +323,67 @@ Aufruf: `mediaclient --getdigitaldata -d <device>` (z.B. `/dev/dab13`) - ein
    einzelne** Slide dieses Senders, unbemerkt. Behoben durch Erhöhung auf
    `checks=4, interval=2.0s, max_attempts=90` (~3 Min. Budget).
 
+**Live gefundener Ausfall (2026-09-21): `digital_data_loop()`-Thread blieb
+hängen, kein Bezug zum Code selbst.** Nach längerer, intensiver Testerei
+(viele direkte SDK-Zugriffe über den Tag verteilt) reagierte die Cover-
+Erfassung irgendwann gar nicht mehr auf Senderwechsel - derselbe
+`mediaclient`-Prozess lief unverändert weiter, obwohl `/dab/now_playing`
+längst einen anderen Sender zeigte. Ein reiner Neustart von
+`dab-bridge.service` allein behob es NICHT (der Thread hing kurz danach
+erneut fest) - erst ein Neustart der ganzen Kette
+(`sundtek-mediasrv.service` + `sundtek-rtspd.service` + `dab-bridge.service`
+zusammen, dieselbe Reihenfolge wie beim Scan-Trigger) brachte es zuverlässig
+wieder zum Laufen, live verifiziert über einen erfolgreichen Sender-
+wechsel danach. Deutet darauf hin, dass der eigentliche verklemmte Zustand
+in `mediasrv` selbst lag (ein Low-Level-Ressourcenzustand, den die
+ungewöhnlich hohe Zahl an `ctypes`-`net_open()`-Aufrufen aus den vielen
+Testskripten dieser Session ausgelöst haben könnte), nicht im
+Python-Code der Bridge. Falls die Cover-Erfassung wieder dauerhaft
+"einfriert" (Sendername in `/dab/artwork_info` bleibt trotz echtem
+Senderwechsel stehen): erst prüfen, ob `mediaclient --getdigitaldata`
+weiterhin neue `/tmp/<n>.JPG`-Dateien schreibt (`ls -lat /tmp/*.JPG` -
+**nach Zeit sortiert, nicht alphabetisch**, sonst werden neue niedrige
+Nummern wie `11.JPG` übersehen); falls ja, aber `/dab/artwork_info` bleibt
+trotzdem stehen, hilft der beschriebene Dreifach-Neustart.
+
+**Weiterer live gefundener und behobener Bug (2026-09-21, "eingefrorener
+Sendername")**: nach einem Senderwechsel (z.B. RTL RADIO -> Absolut BELLA)
+blieb `/dab/artwork_info` dauerhaft auf dem alten Sendernamen ("channel":
+"RTL RADIO") hängen, obwohl `/dab/now_playing` korrekt den neuen Sender
+zeigte - die Karte in HA hätte dadurch potenziell ein Cover vom alten
+Sender fälschlich als aktuell ausgegeben. Ursache: `_copy_artwork_when_
+stable()`-Watcher-Threads sind unabhängig von `digital_data_loop()` und
+können bis zu ihr volles ~3-Minuten-Budget brauchen; ein Watcher, der noch
+für den ALTEN Sender läuft, wenn der Wechsel passiert, überschreibt nach
+Abschluss die Artwork-Variablen mit dem alten Sendernamen und einem
+täuschend aktuellen Zeitstempel - selbst nachdem der Kanalwechsel den
+Zustand bereits korrekt zurückgesetzt hatte. **Fix**: ein Generation-
+Zähler (`_digitaldata_generation`), der bei jedem Start/Stop eines
+`mediaclient`-Prozesses erhöht wird; jeder Watcher merkt sich seine eigene
+Generation beim Start und verwirft sein Ergebnis kommentarlos, falls sich
+die Generation bis zum Abschluss geändert hat. Zusätzlich, als
+client-seitiges Sicherheitsnetz: die Markdown-Karte in
+`homeassistant/dashboard_media_tab.yaml` zeigt das Cover jetzt nur noch an,
+wenn dessen `channel`-Attribut mit `sensor.dab_aktueller_sender`
+übereinstimmt.
+
+**Vereinzelt beobachtet, live bestätigt (2026-09-21), Ursache nicht
+abschließend geklärt**: ein einzelnes erfasstes Cover-Bild zeigte visuell
+eine Überlagerung/Verschmelzung zweier unterschiedlicher Slides (zwei
+"RADIO"-Logos, zwei Textblöcke übereinander) - strukturell aber ein
+vollständig valides JPEG (korrekter SOI/EOI, keine Abbruch-/Timeout-Datei).
+Die Quelldatei auf der Box (`/tmp/N.JPG`) war zum Zeitpunkt der Erfassung
+bereits stabil und veränderte sich danach nicht mehr - der Fehler steckte
+also schon vor unserer Kopie im Ergebnis von `mediaclient`, nicht in einem
+Timing-Problem beim eigenen Stability-Check. In einem direkt anschließenden
+Test über mehrere Minuten (guter Empfang, SNR≈16-18) kamen 3 von 3 weiteren
+Slides sauber und einzeln an - deutet auf einen seltenen Einzelfall hin
+(z.B. eine kurze Empfangsstörung genau während der MOT-Segment-
+Zusammensetzung, oder ein seltener interner mediaclient-Fehler), nicht auf
+einen reproduzierbaren Bug in dieser Bridge. Falls das gehäuft auftritt,
+wäre der nächste Schritt eine striktere Validierung (z.B. Prüfung auf genau
+ein SOI/EOI-Paar ohne eingebettete zweite SOI-Marker im Datenstrom).
+
 **Architektur** (`bridge/dab_bridge.py:digital_data_loop()`): läuft als
 Hintergrund-Thread, pollt `get_dab_now_playing()` alle 5s und hält genau
 einen `mediaclient --getdigitaldata`-Prozess am Leben, solange ein Sender

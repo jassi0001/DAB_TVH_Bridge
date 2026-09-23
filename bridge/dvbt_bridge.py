@@ -8,19 +8,27 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Central install path - change this if the bridge ever moves to a
+# different location on the box; every path below is derived from it
+# rather than hardcoded separately. Shared in spirit with BRIDGE_BASE in
+# dab_bridge.py (both bridges live under the same directory), kept as its
+# own constant here since the two bridges are otherwise independent
+# processes/modules.
+BRIDGE_BASE = "/storage/dab-tvh-bridge"
+
 LISTEN_PORT = 8082
-DVBT_LOG = "/storage/dab-tvh-bridge/dvbt.log"
+DVBT_LOG = f"{BRIDGE_BASE}/dvbt.log"
 
 # Channel names to leave disabled/unmapped (substring match, case-insensitive
 # - one entry per line, '#' comments allowed). Seed with what's not wanted.
-DVBT_EXCLUDE_FILE = "/storage/dab-tvh-bridge/dvbt_exclude.txt"
+DVBT_EXCLUDE_FILE = f"{BRIDGE_BASE}/dvbt_exclude.txt"
 # "raw channel name = display name", one per line, for services whose raw
 # SDT name isn't the desired display name (e.g. regional variants like
 # "NDR FS NDS" -> "NDR 1 Niedersachsen"). Match key is the RAW, untidied
 # service name (tidy_channel_name is deliberately off, see
 # DVBT_MAPPER_SETTINGS) - re-check existing entries after upgrading, since
 # they may have been written against the old, tidied names.
-DVBT_RENAME_FILE = "/storage/dab-tvh-bridge/dvbt_renames.txt"
+DVBT_RENAME_FILE = f"{BRIDGE_BASE}/dvbt_renames.txt"
 
 # TVHeadend channel tags this box already has set up; matched by name so a
 # manual retag/recreate in the UI doesn't break this.
@@ -103,6 +111,47 @@ def _dvbt_networks():
     with _tvh_req("/api/mpegts/network/grid?limit=100") as resp:
         grid = json.loads(resp.read())
     return [e for e in grid["entries"] if (e.get("networkname") or "").upper().startswith(DVBT_NAME_PREFIX.upper())]
+
+
+def get_dvbt_signal_info():
+    """Live tuner signal quality for the physical DVB-T frontend, straight
+    from TVHeadend's own input status API (/api/status/inputs) - unlike the
+    DAB+ bridge, there's no separate low-level SDK for this tuner (it's a
+    standard TBS DVB-T/T2/C/C2 USB card using TVHeadend's own linuxdvb
+    driver), so TVHeadend's own reporting is the only source.
+
+    Important, unlike DAB+'s SDK-based /dab/signal: this only reports
+    anything meaningful while a client is actively subscribed/streaming
+    (subs > 0) - idle reads back all-zero fields, which does NOT mean "no
+    signal", just "not currently tuned to anything". signal_scale/snr_scale
+    follow TVHeadend's own enum: 0=unknown (no value), 1=relative (0..65535,
+    treat as roughly a percentage), 2=decibel (raw value in thousandths of
+    a dB, i.e. divide by 1000 for the real dB figure)."""
+    with _tvh_req("/api/status/inputs", timeout=10) as resp:
+        data = json.loads(resp.read())
+    entry = next((e for e in data.get("entries", []) if e.get("uuid") == DVBT_FRONTEND_UUID), None)
+    if not entry:
+        return {
+            "active": False, "stream": None,
+            "signal": None, "signal_scale": None, "signal_db": None,
+            "snr": None, "snr_scale": None, "snr_db": None,
+            "ber": None, "unc": None,
+        }
+    active = (entry.get("subs") or 0) > 0
+    signal_scale = entry.get("signal_scale")
+    snr_scale = entry.get("snr_scale")
+    return {
+        "active": active,
+        "stream": entry.get("stream") if active else None,
+        "signal": entry.get("signal") if active else None,
+        "signal_scale": signal_scale if active else None,
+        "signal_db": (entry.get("signal") / 1000) if active and signal_scale == 2 else None,
+        "snr": entry.get("snr") if active else None,
+        "snr_scale": snr_scale if active else None,
+        "snr_db": (entry.get("snr") / 1000) if active and snr_scale == 2 else None,
+        "ber": entry.get("ber") if active else None,
+        "unc": entry.get("unc") if active else None,
+    }
 
 
 def list_dvbt_networks():
@@ -771,6 +820,12 @@ class Handler(BaseHTTPRequestHandler):
             network = (query.get("network") or [None])[0]
             try:
                 _send_json(self, 200, {"channels": list_dvbt_channels(network)})
+            except Exception as e:
+                _send_json(self, 502, {"error": str(e)})
+            return
+        if path == "/dvbt/signal":
+            try:
+                _send_json(self, 200, get_dvbt_signal_info())
             except Exception as e:
                 _send_json(self, 502, {"error": str(e)})
             return

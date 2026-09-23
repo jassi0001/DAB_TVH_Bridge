@@ -22,6 +22,7 @@ LibreELEC-Box) angegeben, in deinem Netz entsprechend anpassen.
 | `/dab/signal` | GET | `{device, locked, rssi, snr, fic_quality, cnr, ensemble}` - Live-Tuner-/Ensemble-Info, direkt über Sundteks SDK (`libmcsimple.so`) gelesen statt über die HTTP-API, die das nicht anbietet. Siehe [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4 für Details und Grenzen dieses Wegs (insbesondere: kein Now-Playing/DLS-Songtitel möglich) |
 | `/dab/now_playing` | GET | `{"playing": [<Kanalname>, ...]}` - aktuell tatsächlich gestreamte(r) DAB+-Kanal/-Kanäle, direkt aus TVHeadends eigener `/api/status/subscriptions` gelesen (nicht vom Tuner/SDK - dort ließ sich das nicht zuverlässig auslesen, siehe oben) |
 | `/dab/artwork_info` | GET | `{available, updated_at, channel}` - Status des zuletzt erfolgreich erfassten Cover-Bilds (MOT Slideshow) für den aktuell laufenden Sender. Siehe [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4.3 |
+| `/dab/digitaldata_debug` | GET | `{log_tail}` - letzte 200 Zeilen des persistenten Digitaldata/Cover-Art-Debug-Logs (jede OPENED-Zeile, jeder Erfassungsversuch mit Ausgang, jeder Senderwechsel) - unabhängig von `print()`/journalctl, die sich als unzuverlässig erwiesen haben (siehe SUNDTEK_INSTALL.md Abschnitt 4.3) |
 | `/dab/artwork` | GET | Rohes JPEG des aktuellen Sender-Covers (`Content-Type: image/jpeg`, `Cache-Control: no-cache`), 404 falls (noch) keins vorhanden |
 
 `/rescan` und `/rescan/status` funktionieren weiterhin als Alias zu

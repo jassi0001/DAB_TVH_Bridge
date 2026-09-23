@@ -7,6 +7,37 @@ cards:
   - type: tile
     entity: sensor.dab_scan_status
     name: DAB+ Scan Status
+  - type: entities
+    title: DAB+ Scan Details
+    entities:
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: dab_scanning
+        name: "DAB+ Tuner-Scan läuft"
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: dab_scan_current_freq
+        name: "DAB+ Scan - aktuelle Frequenz"
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: dab_scan_current_stations
+        name: "DAB+ Scan - Sender bisher gefunden"
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: dab_last_scan_freq
+        name: "Letzter DAB+ Scan - Frequenz"
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: dab_last_scan_stations
+        name: "Letzter DAB+ Scan - Sender gefunden"
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: tvh_mux_scan_pending
+        name: TVHeadend Mux-Scan ausstehend
+      - type: attribute
+        entity: sensor.dab_scan_status
+        attribute: tvh_mux_scan_active
+        name: TVHeadend Mux-Scan aktiv
   - type: tile
     entity: sensor.tvheadend_dab_kanaele
   - type: tile
@@ -29,8 +60,14 @@ cards:
     content: >
       ### DAB+ Sender Cover
 
+      {% set cover_channel = state_attr('sensor.dab_sender_cover_status', 'channel') %}
+      {% set now_playing = states('sensor.dab_aktueller_sender') %}
+      {% if state_attr('sensor.dab_sender_cover_status', 'available') and cover_channel == now_playing %}
       ![DAB+ Sender Cover](http://192.168.0.200:8081/dab/artwork?t={{
       state_attr('sensor.dab_sender_cover_status', 'updated_at') }})
+      {% else %}
+      *Noch kein Cover für "{{ now_playing }}" empfangen.*
+      {% endif %}
   - type: entities
     title: DAB+ Standort aktivieren
     entities:
@@ -60,6 +97,36 @@ cards:
   - type: tile
     entity: sensor.dvb_t_senderanzahl
     name: DVB-T Senderanzahl
+  - type: entities
+    title: DVB-T Empfang (live)
+    entities:
+      - entity: sensor.dvb_t_empfang
+        name: Status
+      - type: attribute
+        entity: sensor.dvb_t_empfang
+        attribute: stream
+        name: Aktueller Stream
+      - type: attribute
+        entity: sensor.dvb_t_empfang
+        attribute: snr_db
+        name: "SNR (dB, falls verfuegbar)"
+      - type: attribute
+        entity: sensor.dvb_t_empfang
+        attribute: snr
+        name: "SNR (Rohwert, falls Skala unbekannt)"
+      - type: attribute
+        entity: sensor.dvb_t_empfang
+        attribute: signal_db
+        name: "Signalstaerke (dB, falls verfuegbar)"
+      - type: attribute
+        entity: sensor.dvb_t_empfang
+        attribute: unc
+        name: "Unkorrigierte Bloecke"
+    footer:
+      type: markdown
+      content: >
+        *Nur waehrend ein Kanal aktiv gestreamt wird verfuegbar - im
+        Leerlauf zeigt TVHeadend keine sinnvollen Werte.*
   - type: entities
     title: DVB-T Standort aktivieren
     entities:
