@@ -25,11 +25,17 @@ rest_command:
     method: POST
     timeout: 10
   fm2_trigger_exclude:
-    url: "http://192.168.0.200:8093/fm/exclude?name={{ name | urlencode }}&excluded={{ excluded }}"
+    # name arrives pre-encoded from the calling script (dot -> %2E, see
+    # there for why) - do NOT run it through | urlencode again here, that
+    # would double-encode the already-literal "%2E" into "%252E".
+    url: "http://192.168.0.200:8093/fm/exclude?name={{ name }}&excluded={{ excluded }}"
     method: POST
     timeout: 10
   fm2_trigger_rename:
-    url: "http://192.168.0.200:8093/fm/rename?raw_name={{ raw_name | urlencode }}&display_name={{ display_name | urlencode }}"
+    # raw_name: see fm2_trigger_exclude above - already pre-encoded, do not
+    # | urlencode again. display_name is free text typed by the user, not a
+    # frequency, so it still needs the normal encoding here.
+    url: "http://192.168.0.200:8093/fm/rename?raw_name={{ raw_name }}&display_name={{ display_name | urlencode }}"
     method: POST
     timeout: 10
 
@@ -165,7 +171,19 @@ script:
     sequence:
       - action: rest_command.fm2_trigger_exclude
         data:
-          name: "{{ states('input_select.fm2_sender_auswahl') }}"
+          # FM station "names" are bare frequency numbers (e.g. "91.50").
+          # A data field template that is a single bare expression gets
+          # its rendered TEXT re-parsed into a native Python type by Home
+          # Assistant whenever that text looks like a plain number - which
+          # silently turns "91.50" into the float 91.5, dropping the
+          # trailing zero (live-confirmed 2026-09-26; neither | string nor
+          # | tojson prevented this in practice). Replacing the dot with
+          # its percent-encoding makes the text non-numeric-looking, so it
+          # survives untouched - the receiving HTTP server decodes %2E
+          # back to "." automatically as part of normal URL-query parsing,
+          # no bridge-side change needed. See the matching comment on
+          # rest_command.fm2_trigger_exclude/fm2_trigger_rename above.
+          name: "{{ states('input_select.fm2_sender_auswahl') | replace('.', '%2E') }}"
           excluded: true
 
   fm2_sender_einschliessen:
@@ -173,7 +191,7 @@ script:
     sequence:
       - action: rest_command.fm2_trigger_exclude
         data:
-          name: "{{ states('input_select.fm2_sender_auswahl') }}"
+          name: "{{ states('input_select.fm2_sender_auswahl') | replace('.', '%2E') }}"
           excluded: false
 
   fm2_sender_umbenennen:
@@ -181,7 +199,7 @@ script:
     sequence:
       - action: rest_command.fm2_trigger_rename
         data:
-          raw_name: "{{ states('input_select.fm2_sender_auswahl') }}"
+          raw_name: "{{ states('input_select.fm2_sender_auswahl') | replace('.', '%2E') }}"
           display_name: "{{ states('input_text.fm2_sender_neuer_name') }}"
 
 automation:
