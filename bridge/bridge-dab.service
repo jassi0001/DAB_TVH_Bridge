@@ -1,0 +1,12 @@
+[Unit]
+Description=DAB+ TVHeadend M3U bridge (v2, native API, no mediaclient)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /storage/dab-tvh-bridge/dab_bridge2.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=kodi.target

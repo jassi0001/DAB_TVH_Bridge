@@ -19,7 +19,7 @@ Liste entfernt (verifiziert per HAR-Mitschnitt echter Browser-Sessions) -
 es ist also kein Bug in diesem Projekt, sondern in der Sundtek-Firmware
 selbst.
 
-**Konsequenz für dieses Projekt**: `bridge/dab_bridge.py` verwaltet gar
+**Konsequenz für dieses Projekt**: `bridge/dab_bridge2.py` verwaltet gar
 keine Sundtek-seitige Favoriten-/Gruppen-Liste mehr. Stattdessen liest es
 bei jeder Anfrage direkt das Ergebnis des **neuesten abgeschlossenen
 Scans** (`cmd=providers` -> höchste `prid` -> `cmd=chlist&mode=scanlist`)
@@ -33,7 +33,7 @@ entgegengenommen, aber ohne vorherigen Neustart von
 `sundtek-mediasrv.service` **und** `sundtek-rtspd.service` bleibt der Scan
 bei einer festen Frequenz stehen und es erscheint nie ein neuer Eintrag in
 `cmd=providers`. Grund unbekannt (vermutlich interner Zustand, der nur bei
-Prozessstart korrekt initialisiert wird). `bridge/dab_bridge.py` restartet
+Prozessstart korrekt initialisiert wird). `bridge/dab_bridge2.py` restartet
 deshalb beide Dienste unmittelbar vor jedem Scan-Trigger.
 
 ## 3. `cmd=providers`-Historie ist nicht dauerhaft/nicht fortlaufend
@@ -109,7 +109,7 @@ enthalten):
 - Kanal-Ebene: `epgauto` ("EPG Quelle automatisch zuordnen")
 - Mux-Ebene: `epg` ("EPG-Abfrage", Wert `1` = "Aktivieren (auto)")
 
-Beide werden von `bridge/dab_bridge.py` bei jedem Mapper-Durchlauf
+Beide werden von `bridge/dab_bridge2.py` bei jedem Mapper-Durchlauf
 automatisch auf "aus" gesetzt (auch rückwirkend für bereits gemappte
 Kanäle/Muxe, nicht nur neue).
 
@@ -223,7 +223,7 @@ untaggte Kanäle bekamen beim nächsten `/dvbt/activate` korrekt ihr
 
 ## 12. TVHeadends eigene Mux-Scan-Queue läuft nach Abschluss des eigenen Scan-Skripts weiter
 
-Der von `bridge/dab_bridge.py` ausgelöste Scan-Lauf meldet über
+Der von `bridge/dab_bridge2.py` ausgelöste Scan-Lauf meldet über
 `/dab/status` `running: false, returncode: 0`, sobald das eigene Skript
 fertig ist (Sundtek-Scan abgewartet, TVHeadend neu gestartet). Das
 bedeutet aber **nicht**, dass der Tuner danach wieder frei ist: TVHeadend
@@ -249,86 +249,44 @@ zusammengefassten Bool `tvh_scanning` (siehe
 [API.md](API.md)) - vor jedem direkten Tuner-Zugriff sollte das geprüft
 werden, nicht nur der eigene `running`-Status.
 
-## 13. `iptv_auto_network`-Netzwerkeinstellungen beeinflussen die Scan-Zuverlässigkeit erheblich - v2 musste v1 Feld für Feld angeglichen werden
+## 13. `iptv_auto_network`-Netzwerkeinstellungen, auf die es für zuverlässiges Scannen konkret ankommt
 
-`dab_bridge2.py`s TVHeadend-Netzwerk ("DAB+ v2") wurde ursprünglich mit
-Werten angelegt, die von einem anderen, unverwandten Netzwerk-Beispiel
-kopiert wurden - nicht von "DAB+" (v1), obwohl beide dieselbe
-`iptv_auto_network`-Klasse verwenden und denselben physischen Tuner
-teilen. Live-Vergleich (2026-09-25) beider Netzwerk-Objekte über
-`/api/mpegts/network/grid` zeigte vier konkrete Abweichungen, die v2
-zuverlässig schlechter scannen ließen als das seit langem funktionierende
-v1:
+Sowohl "DAB+ v2" als auch "FM v2" sind TVHeadend-`iptv_auto_network`-
+Netzwerke und brauchen dieselben Feldwerte, damit Scans zuverlässig
+Services finden (per `/api/mpegts/network/grid` gesetzt/geprüft):
+`priority`/`spriority: 50`, `max_timeout: 10`, `idlescan: false`,
+`scan_create: false`, `skipinitscan: false`, `max_streams: 1`,
+`remove_args: "ticket"`, `ignore_chnum: true`, `refetch_period: 6000`
+(Minuten - praktisch nie, da die Bridge TVHeadend nach jedem Rescan selbst
+neu startet, siehe [ARCHITECTURE.md](ARCHITECTURE.md)). Abweichungen bei
+Priorität, Timeout oder den beiden Scan-Flags (`idlescan`/`scan_create`)
+haben sich live als unerwartet folgenreich erwiesen - Services wurden
+dabei zuverlässig **nicht** gefunden, ohne dass eine Fehlermeldung
+entstand.
 
-| Feld | v1 (funktioniert) | v2 (vorher) |
-|---|---|---|
-| `priority` / `spriority` | 50 | 1 |
-| `max_timeout` | 25 (später von Hand auf 10 reduziert, funktioniert ebenfalls) | 0 |
-| `idlescan` | `false` | `true` |
-| `scan_create` | `false` | `true` |
+## 14. Nur rtspds eigener M3U-Export liefert durchgehend funktionierende Stream-URLs
 
-**Fix**: v2 wurde gelöscht und mit exakt denselben Werten wie v1 neu
-angelegt (`priority`/`spriority: 50`, `max_timeout: 10`, `idlescan: false`,
-`scan_create: false`, dazu unverändert `skipinitscan: false`,
-`max_streams: 1`, `remove_args: "ticket"`, `ignore_chnum: true`,
-`refetch_period: 6000`). Live bestätigt danach: Services wurden wieder
-zuverlässig gefunden.
-
-**Zusätzlicher, unabhängiger Fund derselben Untersuchung**: `cmd=chlist`
-(Sundteks eigene API) liefert Stream-URLs mit dem Host, über den der
-zuletzt auslösende Client verbunden war - ruft `dab_bridge2.py`s eigener
-`_perform_dab_scan()` den Scan über `SUNDTEK_BASE = "http://127.0.0.1:22000"`
-auf (Loopback, da auf derselben Box laufend), tauchen in den
-zurückgelieferten URLs ebenfalls `127.0.0.1` auf - während v1s M3U (aus
-einer früher, anders ausgelösten Scan-Session) durchgehend die echte
-LAN-IP der Box zeigte. Live-Test bestätigte: mit der echten LAN-IP
-scannt es zuverlässig, mit `127.0.0.1` nicht. **Fix**: `build_m3u()` in
-`dab_bridge2.py` schreibt den Host in jeder Stream-URL jetzt explizit auf
-die Konstante `RTSPD_STREAM_HOST` (die reale LAN-IP der Box) um, statt dem
-von `cmd=chlist` gelieferten Host zu vertrauen.
-
-Damit sind **beide** heute vermuteten größeren Fehlerquellen dieselbe
-Kategorie: TVHeadend-Netzwerk-Konfigurationsfelder und die Sundtek-API
-selbst reagieren empfindlicher auf scheinbare Kleinigkeiten (Priorität,
-Timeout, Host-Adresse) als erwartet - beim Nachbauen eines neuen
-Netzwerks/einer neuen Bridge lohnt sich ein Feld-für-Feld-Diff gegen ein
-bekanntermaßen funktionierendes Pendant, bevor man tiefer in TVHeadends
-eigenem Scan-Verhalten sucht.
-
-## 14. Eigenes, Bridge-eigenes Streaming (statt TVHeadends `pipe://ffmpeg`) live getestet und wieder verworfen
-
-Eine Zwischenversion von `dab_bridge2.py` (und ein separater
-`tuner_bridge.py`-Arbiter für DAB+ *und* FM gemeinsam) ließ die Bridge
-selbst einen ffmpeg-Prozess pro Sender halten und TVHeadend nur eine
-`http://<box>:PORT/live?...`-URL zum Abonnieren geben, statt TVHeadend
-einen `pipe://ffmpeg ...`-Befehl direkt ausführen zu lassen (wie v1).
-Ziel war, dieselbe Tuner-Ressource über DAB+ *und* FM hinweg zentral zu
-verwalten.
-
-**Live widerlegt (2026-09-25)**: Ein direkter, kontrollierter Test mit
-zwei quasi-gleichzeitigen Verbindungen auf **derselbe** DAB+-Frequenz
-(unterschiedliche `sid`, gleicher `freq`) zeigte, dass rtspd trotzdem nur
-**eine** davon tatsächlich mit Daten beliefert - die zweite bekam
-durchgehend 0 Bytes, obwohl beide Services zum selben Ensemble gehören.
-Entscheidender noch: ein Abruf über TVHeadends **eigenen**
-`/stream/service/<uuid>`-Endpunkt (also exakt der Pfad, den `pipe://`
-benutzt) versagte zum selben Zeitpunkt identisch - das bewies, dass die
-Instabilität in der geteilten rtspd/Tuner-Schicht selbst liegt, nicht in
-der Bridge-Architektur. Der single-stream-eigene-ffmpeg-Ansatz brachte
-also keinen Vorteil gegenüber TVHeadends eigenem `pipe://`-Mechanismus,
-fügte aber zusätzliche Komplexität (eigener `_StreamManager`,
-Cross-Prozess-Koordination zwischen DAB+ und FM) ein.
-
-**Konsequenz**: `dab_bridge2.py` wurde auf `pipe://ffmpeg ...`
-zurückgebaut (identisch zu v1s `build_m3u()`, siehe Punkt 13 oben für die
-seitdem gefundenen echten Ursachen). `tuner_bridge.py` bleibt im Repo
-liegen (unbenutzt) als Referenz, falls die Idee mit besseren TVHeadend-
-Netzwerkeinstellungen nochmal aufgegriffen werden soll.
+Sundteks eigene `cmd=chlist`-API liefert Stream-URLs, denen der
+`comp=`-Parameter (Audio-Komponenten-Index innerhalb des Ensembles) fehlt
+und deren `sid` mit `0x`-Präfix formatiert ist - beides live bestätigt als
+Ursache für unzuverlässiges Umschalten. `http://127.0.0.1:22000/dab.m3u`
+(rtspds eigener M3U-Export, trotz des Namens DAB+ **und** FM gemischt
+enthaltend, nach `delsys` filterbar: `15`=DAB+, `255`=FM) liefert dagegen
+durchgehend das korrekte Format inkl. `comp=` und unpräfixiertem `sid`, in
+genau der Reihenfolge `devid/freq/sid/delsys/comp`. Zusätzlich liefert
+`cmd=chlist` den Host in jeder URL so, wie der zuletzt auslösende Client
+verbunden war (bei einem lokal auf der Box ausgelösten Scan also
+`127.0.0.1`) - auch das live bestätigt als Ursache für nicht
+funktionierende Streams, wenn dieser Host unverändert übernommen wird.
+`fetch_stations()`/`fetch_live_stations()` beziehen deshalb die
+Senderliste beider Bridges aus `/dab.m3u`, und `build_m3u()` schreibt den
+Host in jeder Stream-URL zusätzlich explizit auf die reale LAN-IP der Box
+um (Konstante `RTSPD_STREAM_HOST` in beiden Bridge-Dateien).
 
 ## 15. TVHeadends Mux-Scan-Reihenfolge richtet sich nicht nach der M3U-Reihenfolge
 
 Quellcode-Analyse von `src/input/mpegts/mpegts_network_scan.c`
-(tvheadend/tvheadend auf GitHub, 2026-09-25): Pending-Muxe liegen in zwei
+(tvheadend/tvheadend auf GitHub): Pending-Muxe liegen in zwei
 Warteschlangen (`mn_scan_pend` für den Init-Scan, `mn_scan_ipend` für den
 Idle-Scan bei `idlescan: true`), sortiert per `mm_cmp()` primär nach
 `mm_scan_weight` (bei allen frisch angelegten Init-Scan-Muxen identisch)
@@ -340,13 +298,31 @@ vor. Schlägt ein Versuch fehl, wird der Mux per `mm_scan_state =
 MM_SCAN_STATE_IDLE` markiert (UI-Anzeige "Inaktiv") und - sofern
 `idlescan: true` - automatisch in `mn_scan_ipend` zurückgehängt
 (`mpegts_network_scan_mux_done0()`), aber eben in die langsamere
-Idle-Queue, nicht sofort erneut in die Standard-Queue.
+Idle-Queue, nicht sofort erneut in die Standard-Queue. Die Reihenfolge von
+Sendern in der von der Bridge gelieferten M3U hat auf die tatsächliche
+Scan-Reihenfolge deshalb keinen Einfluss - der eigentliche Hebel für
+zuverlässiges Scannen ist die Netzwerk-Konfiguration selbst (Punkt 13) und
+die per API erzwungene, frequenzgruppenweise Aktivierung (`/dab/scan_ordered`,
+`/fm/scan_ordered`, siehe [API.md](API.md)), die TVHeadends eigene
+Warteschlangen-Reihenfolge gezielt umgeht.
 
-**Konsequenz**: Ein Versuch in `build_m3u()`, Sender derselben Frequenz
-in der M3U-Datei benachbart anzuordnen ("damit TVHeadend sie
-hintereinander scannt"), hat auf die tatsächliche Scan-Reihenfolge keinen
-Einfluss - TVHeadend sortiert nach dem Einlesen ohnehin nach eigener
-Logik um. Die Sortierung in `build_m3u()` wurde trotzdem beibehalten
-(schadet nicht, hilft aber auch nicht der Scan-Reihenfolge) - der
-eigentliche Hebel für zuverlässiges Scannen war die Netzwerk-Konfiguration
-selbst (Punkt 13).
+## 16. Gemeinsamer physischer Tuner zwischen DAB+ und FM: TVHeadend kennt die Kopplung nicht
+
+TVHeadend verarbeitet die Mux-Scan-Warteschlangen von "DAB+ v2" und
+"FM v2" komplett unabhängig voneinander (siehe Punkt 15) - aus seiner
+Sicht zwei gewöhnliche, unabhängige IPTV-Netzwerke, ohne jede Kenntnis,
+dass beide denselben physischen Sundtek-Tuner exklusiv nutzen. Ohne
+Gegenmaßnahme scannt/tunt TVHeadend deshalb gelegentlich beide Seiten
+gleichzeitig, was den gemeinsamen Tuner zuverlässig durcheinanderbringt.
+Die Lösung (prozessübergreifender `flock()`-Lock für selbst ausgelöste
+Scans, plus ein Hintergrund-Wächter, der TVHeadends eigene autonome
+Scan-Queue-Aktivität für die jeweils andere Seite zurückstellt, plus
+automatisches Zurücksetzen bereits erfolgreich gescannter Muxe, die
+TVHeadend grundlos erneut in die Warteschlange stellt) ist bewusst
+identisch in beiden Bridges implementiert - siehe
+[ARCHITECTURE.md](ARCHITECTURE.md#gemeinsamer-tuner-dab-und-fm-schliessen-sich-gegenseitig-aus)
+für die vollständige Beschreibung. Wichtig für den Betrieb: der Wächter
+läuft nur, solange der jeweilige Bridge-Prozess selbst läuft (`bridge-dab.
+service`/`bridge-fm.service`) - ist eine der beiden Seiten gestoppt, ist
+sie insoweit auch nicht mehr gegen TVHeadends autonome Scans der anderen
+Seite abgesichert.

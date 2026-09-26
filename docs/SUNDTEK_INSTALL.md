@@ -146,7 +146,7 @@ Stations-/Scan-Datenbank (`sundtek.db`) erwartet bzw. anlegt - das ist die
 Beide Dienste müssen für einen **echten, persistenten Scan** unmittelbar
 vor dem Scan-Trigger neu gestartet werden (siehe
 [docs/TVHEADEND_QUIRKS.md](TVHEADEND_QUIRKS.md)) - das übernimmt
-automatisiert `bridge/dab_bridge.py`.
+automatisiert `bridge/dab_bridge2.py`/`bridge/fm_bridge2.py`.
 
 ## 3. Web-Admin-UI offline nutzbar machen (Picon-Mirror + DNS)
 
@@ -206,20 +206,25 @@ Herkunft von `/storage/picons/` (z.B. per USB-Stick kopiert oder von einem
 Picon-Repository heruntergeladen) ist im aktuellen Boxzustand nicht mehr
 eindeutig nachvollziehbar.
 
-## 4. Live-Signalqualität/Ensemble-Info per SDK, Now-Playing, und Cover-Art (MOT Slideshow)
+## 4. Live-Signalqualität/Ensemble-Info, Now-Playing, Cover-Art/DLS (DAB+) und RDS (FM) per SDK
 
 Sundtek liefert unter `/storage/dabplus/opt/include/` (`mcsimple.h`,
 `mediaclient.h`, `mediacmds.h`) und `/storage/dabplus/opt/lib/libmcsimple.so`
-das komplette C-SDK mit, das `mediaclient` selbst nutzt. Kein Compiler auf
-der Box nötig - Python `ctypes` kann die exportierten Funktionen
+das komplette C-SDK mit, das auch `mediaclient` selbst nutzt. Kein Compiler
+auf der Box nötig - Python `ctypes` ruft die exportierten Funktionen
 (`net_open`, `net_ioctl`, `net_close`, alle `EXPORT`-markiert) direkt gegen
-die `.so`-Datei aufrufen, keine besonderen Abhängigkeiten (`ldd` zeigt nur
-Standard-Systembibliotheken, kein `LD_LIBRARY_PATH` nötig).
+die `.so`-Datei auf, keine besonderen Abhängigkeiten (`ldd` zeigt nur
+Standard-Systembibliotheken, kein `LD_LIBRARY_PATH` nötig). Beide Bridges
+(`dab_bridge2.py`, `fm_bridge2.py`) nutzen ausschließlich diesen direkten
+Weg - kein externer `mediaclient`-Prozess ist an irgendeiner Stelle
+beteiligt.
 
 ### 4.1 Signalqualität/Ensemble-Info (SDK, direkt per ctypes)
 
 **Funktioniert zuverlässig, live bestätigt** (siehe
-`bridge/dab_bridge.py:get_dab_signal_info()`, Endpunkt `/dab/signal`):
+`bridge/dab_bridge2.py:get_dab_signal_info()`, Endpunkt `/dab/signal`;
+FM hat dasselbe über `fm_bridge2.py:get_fm_signal_info()`/`/fm/signal`,
+allerdings nur die rohe V4L2-Signalstärke, kein Ensemble-Äquivalent):
 - `DAB_GET_ENSEMBLE_INFO` (128) - Ensemble-Name
 - `DAB_GET_TUNER` (68) - Lock-Status, RSSI/SNR/FIC-Qualität/CNR
 - `DAB_GET_TIME` (129) - aktuelle DAB-Zeit
@@ -252,230 +257,112 @@ deckt sich grob mit dem hier beobachteten Muster.
 
 **Nicht** vom Tuner/SDK gelesen, sondern direkt aus TVHeadends eigener
 `/api/status/subscriptions` - TVHeadend weiß ohnehin exakt, welcher Kanal an
-welchen Client gestreamt wird, da es die Subscription selbst verwaltet.
-Live bestätigt (`GET /dab/now_playing`,
-`bridge/dab_bridge.py:get_dab_now_playing()`): korrekt `["Schwarzwaldradio"]`
-während eines echten Streams, `[]` im Leerlauf. Grund: ein eigener
-`ctypes`-Client, der versucht den aktuell getunten Service selbst
-auszulesen, bekommt keinen zuverlässigen Wert (siehe 4.3 für dieselbe
-Grundproblematik bei den Digital-Service-Daten) - TVHeadends eigene
-Buchführung ist die einzige robuste Quelle.
+welchen Client gestreamt wird, da es die Subscription selbst verwaltet
+(`GET /dab/now_playing`/`/fm/now_playing`). Ein eigener `ctypes`-Client, der
+versucht den aktuell getunten Service selbst auszulesen, bekommt keinen
+zuverlässigen Wert - TVHeadends eigene Buchführung ist die einzige robuste
+Quelle.
 
-### 4.3 Cover-Art (MOT Slideshow) - funktioniert; DLS (Songtitel) - funktioniert nicht
+### 4.3 Cover-Art (MOT Slideshow) und DLS bei DAB+ - direkt über die SDK, ohne externen Prozess
 
-**Korrektur einer früheren, falschen Annahme in dieser Doku**: hier stand
-zuvor, `mediaclient --getdigitaldata` existiere nicht (angeblich keine
-Treffer in der `--help`-Ausgabe). Das war falsch - der Befehl existiert und
-funktioniert, ist nur aus unbekanntem Grund nicht in `--help` dokumentiert.
-Aufruf: `mediaclient --getdigitaldata -d <device>` (z.B. `/dev/dab13`) - ein
-**langlaufender Poll-Befehl**, kein One-Shot.
+Beide Bridges lesen Digital-Service-Daten (MOT-Slideshow-Bilder, Dynamic-
+Label-Text) direkt über `DAB_GET_DIGITAL_SERVICE_DATA` (Ioctl-Nummer 119)
+aus - ein zweiphasiger Probe-dann-Fetch-Aufruf gegen dasselbe
+`/dev/dabN`-Gerät, das auch für Signalqualität/Ensemble-Info genutzt wird.
+Kein `mediaclient`-Subprozess ist beteiligt.
 
-**Live bestätigt über mehrere Sender und lange Testfenster**:
-- **MOT Slideshow (Cover-Bilder) funktioniert zuverlässig.** `mediaclient`
-  schreibt dekodierte JPEGs nach `/tmp/<n>.JPG` und meldet `"OPENED:
-  <pfad>"`, sobald es eine neue Datei zu schreiben beginnt.
-- **DLS (Songtitel/Interpret) funktioniert dagegen nie**, weder über die
-  CLI noch über den direkten SDK-Weg:
-  - CLI-Ausgabe zeigte über mehrere Sender und lange Aufnahmefenster
-    ausschließlich `data_group_type: 3` (MOT-Header) und `4` (MOT-Body),
-    nie den DLS-Typ.
-  - Direkter Test per `ctypes`/`DAB_GET_DIGITAL_SERVICE_DATA` (119)
-    bestätigt dasselbe auf niedrigerer Ebene: das `type`-Feld der
-    zurückgegebenen Struktur ist konstant `2` (MOT), nie `1` (DLS) - auch
-    bei exklusivem Gerätezugriff (kein konkurrierender Prozess) und sehr
-    hoher Poll-Rate (~19.000 Polls/Sekunde).
-  - **Externe Bestätigung**: laut einem Discord-Beitrag, den der Nutzer
-    gefunden hat, ist das DLS-Parsing in `mediaclient` aktuell auf
-    Sundtek-Seite pausiert/deaktiviert - das deckt sich exakt mit dem hier
-    beobachteten Verhalten. Es gibt dazu bereits eine offene Anfrage im
-    Sundtek-Forum; sobald ein zukünftiger `mediaclient`-Build DLS wieder
-    liefert, ist `_digitaldata_reader()` in `bridge/dab_bridge.py` die
-    Stelle, an der das Parsing ergänzt werden muss (siehe TODO-Kommentar
-    dort).
-- Installierte `mediaclient`-Version: Build `2026-06-25` (per
-  `media_build_version()`, SDK-exportiert, ausgelesen).
+**Segment-Reassemblierung (MOT Slideshow)**: die zurückgelieferte
+`dab_service_data`-Struktur liefert einzelne Data-Group-Fragmente. Das
+Data-Group-Header-Parsing (Extension-/CRC-/Segment-/User-Access-Flags,
+Segmentindex, Transport-ID) folgt exakt ETSI EN 300 401 §5.3.3.1 und wurde
+gegen echte, aufgezeichnete Rohdaten dieser Box (RTL RADIO, NDR 2 NDS)
+bit-für-bit verifiziert. Die MOT-Header-**internen**
+Body-Size-/Header-Size-Felder ließen sich dagegen nicht zuverlässig auf
+sinnvolle Werte dekodieren (eine Diskrepanz in der Berechnung des
+User-Access-Feld-Anteils, nicht weiter verfolgt) - statt einem einmal
+falsch bestätigten Offset zu vertrauen, werden die beiden einzigen
+tatsächlich benötigten Dinge stattdessen direkt und selbstverifizierend
+gesucht:
+- der Start des Bildkörpers, über dessen eigene Magic-Bytes (JPEG
+  `\xff\xd8\xff` bzw. PNG-Signatur)
+- der `ContentName`-Parameter (Dateiname/Bildtyp), über sein
+  charakteristisches erstes Byte (PLI=3 + Parameter-ID=12 ergibt
+  `0xCC`), gefolgt von einer plausiblen Kurzform-Länge und druckbarem Text
 
-**Zwei nicht-triviale Implementierungsprobleme, live gefunden und behoben**
-(siehe `bridge/dab_bridge.py`, Funktionen `digital_data_loop()`,
-`_digitaldata_reader()`, `_copy_artwork_when_stable()`):
+Beide Heuristiken sind selbstprüfend (Magic-Bytes bzw. Druckbarkeits-Check),
+ein Fehltreffer ist damit praktisch ausgeschlossen, auch ohne die exakten
+Header-Offsets zu kennen.
 
-1. **glibc-Stdout-Pufferung**: `mediaclient`s eigenes stdout wird von glibc
-   blockweise gepuffert, wenn es kein TTY ist (Standardverhalten bei
-   `subprocess.PIPE`) - ein Reader-Thread bekam über die gesamte
-   Prozesslaufzeit **keine einzige Zeile** Output, obwohl der Prozess
-   nachweislich echte JPEG-Dateien schrieb. Lösung: `pty.openpty()`
-   verwenden und den Slave-fd als stdout/stderr übergeben - dadurch erkennt
-   `mediaclient` ein "interaktives Terminal" und schaltet auf
-   Zeilenpufferung um.
-2. **JPEG-Vollständigkeit**: MOT-Segmentdateien werden über mehrere Sekunden
-   inkrementell geschrieben. Ein zu früher Kopiervorgang direkt bei
-   `"OPENED:"` liefert nur ein ~500-Byte-Fragment. Auch "Größe ist seit N
-   Checks stabil" reichte allein nicht aus - live beobachtet, dass eine
-   "stabile" Datei trotzdem den EOI-Marker am Ende fehlte. Endgültige
-   Lösung: sowohl SOI (`\xff\xd8`, erste 2 Bytes) als auch EOI (`\xff\xd9`,
-   letzte 2 Bytes) prüfen, mit einem kurzen Retry, bevor eine Datei als
-   vollständig akzeptiert wird.
-3. **Timeout-Budget zu knapp für große Bilder**: das ursprüngliche Budget
-   (`checks=4, interval=1.5s, max_attempts=20`, ~30s) war für Sender mit
-   größeren Slideshow-Bildern zu kurz - live beobachtet (Sender "ffn"): eine
-   Datei wuchs noch bei Sekunde 36 linear über 24 KB, war also bei Weitem
-   nicht fertig. Das ursprüngliche 30s-Budget verwarf dadurch **jedes
-   einzelne** Slide dieses Senders, unbemerkt. Behoben durch Erhöhung auf
-   `checks=4, interval=2.0s, max_attempts=90` (~3 Min. Budget).
+**Mehrere Bildtypen pro Sender**: manche Sender (z.B. NDR 2, NDR Info)
+senden nicht ein einzelnes, rotierendes Cover, sondern mehrere
+verschiedene Inhaltstypen verschachtelt im 15-20s-Takt - Content-Namen wie
+`20260923_051518Z_PROGRAMMTIPP_47698.jpg` zeigen das Typ-Segment explizit
+(`NEWS`, `SENDUNG`, `TEASER`, `TEASER2`, `COVER`, `WETTER`, `NEWS2`,
+`PROGRAMMTIPP` beobachtet; ein einfacher Zählername wie `37.JPG` fällt auf
+den Typ `cover` zurück). `/dab/artwork_info` liefert den erkannten Typ des
+zuletzt aktualisierten Bilds; `/dab/artwork` liefert immer nur das eine
+aktuellste Bild (`current.jpg`, atomar per `os.replace()` ersetzt), keinen
+Typ-für-Typ-Puffer - die Home-Assistant-Karte zeigt also je nach Sender
+mal ein Cover, mal ein Wetter- oder Nachrichtenbild, aber immer nur eins
+auf einmal.
 
-**Live gefundener Ausfall (2026-09-21): `digital_data_loop()`-Thread blieb
-hängen, kein Bezug zum Code selbst.** Nach längerer, intensiver Testerei
-(viele direkte SDK-Zugriffe über den Tag verteilt) reagierte die Cover-
-Erfassung irgendwann gar nicht mehr auf Senderwechsel - derselbe
-`mediaclient`-Prozess lief unverändert weiter, obwohl `/dab/now_playing`
-längst einen anderen Sender zeigte. Ein reiner Neustart von
-`dab-bridge.service` allein behob es NICHT (der Thread hing kurz danach
-erneut fest) - erst ein Neustart der ganzen Kette
-(`sundtek-mediasrv.service` + `sundtek-rtspd.service` + `dab-bridge.service`
-zusammen, dieselbe Reihenfolge wie beim Scan-Trigger) brachte es zuverlässig
-wieder zum Laufen, live verifiziert über einen erfolgreichen Sender-
-wechsel danach. Deutet darauf hin, dass der eigentliche verklemmte Zustand
-in `mediasrv` selbst lag (ein Low-Level-Ressourcenzustand, den die
-ungewöhnlich hohe Zahl an `ctypes`-`net_open()`-Aufrufen aus den vielen
-Testskripten dieser Session ausgelöst haben könnte), nicht im
-Python-Code der Bridge. Falls die Cover-Erfassung wieder dauerhaft
-"einfriert" (Sendername in `/dab/artwork_info` bleibt trotz echtem
-Senderwechsel stehen): erst prüfen, ob `mediaclient --getdigitaldata`
-weiterhin neue `/tmp/<n>.JPG`-Dateien schreibt (`ls -lat /tmp/*.JPG` -
-**nach Zeit sortiert, nicht alphabetisch**, sonst werden neue niedrige
-Nummern wie `11.JPG` übersehen); falls ja, aber `/dab/artwork_info` bleibt
-trotzdem stehen, hilft der beschriebene Dreifach-Neustart.
+**DLS (Dynamic Label, Songtitel/Interpret)**: strukturell implementiert
+(`type == DLS_TYPE` in derselben Datenstruktur, Textfeld ab Byte 2 nach
+EN 300 401 §7.4.5.2 dekodiert), aber bisher bei **keinem** auf dieser Box
+getesteten Sender tatsächlich mit echten Daten beobachtet - alle bisher
+empfangenen Digital-Service-Daten waren MOT-Typ. Das Parsing verwirft
+defensiv alles, was nicht zu druckbarem Text mit plausibler Länge dekodiert,
+statt etwas Falsches anzuzeigen. `/dab/now_playing_text` liefert deshalb
+aktuell durchgehend `text: null`.
 
-**Weiterer live gefundener und behobener Bug (2026-09-21, "eingefrorener
-Sendername")**: nach einem Senderwechsel (z.B. RTL RADIO -> Absolut BELLA)
-blieb `/dab/artwork_info` dauerhaft auf dem alten Sendernamen ("channel":
-"RTL RADIO") hängen, obwohl `/dab/now_playing` korrekt den neuen Sender
-zeigte - die Karte in HA hätte dadurch potenziell ein Cover vom alten
-Sender fälschlich als aktuell ausgegeben. Ursache: `_copy_artwork_when_
-stable()`-Watcher-Threads sind unabhängig von `digital_data_loop()` und
-können bis zu ihr volles ~3-Minuten-Budget brauchen; ein Watcher, der noch
-für den ALTEN Sender läuft, wenn der Wechsel passiert, überschreibt nach
-Abschluss die Artwork-Variablen mit dem alten Sendernamen und einem
-täuschend aktuellen Zeitstempel - selbst nachdem der Kanalwechsel den
-Zustand bereits korrekt zurückgesetzt hatte. **Fix**: ein Generation-
-Zähler (`_digitaldata_generation`), der bei jedem Start/Stop eines
-`mediaclient`-Prozesses erhöht wird; jeder Watcher merkt sich seine eigene
-Generation beim Start und verwirft sein Ergebnis kommentarlos, falls sich
-die Generation bis zum Abschluss geändert hat. Zusätzlich, als
-client-seitiges Sicherheitsnetz: die Markdown-Karte in
-`homeassistant/dashboard_media_tab.yaml` zeigt das Cover jetzt nur noch an,
-wenn dessen `channel`-Attribut mit `sensor.dab_aktueller_sender`
-übereinstimmt.
+### 4.4 RDS bei FM - ebenfalls direkt über die SDK
 
-**Vereinzelt beobachtet, live bestätigt (2026-09-21), Ursache nicht
-abschließend geklärt**: ein einzelnes erfasstes Cover-Bild zeigte visuell
-eine Überlagerung/Verschmelzung zweier unterschiedlicher Slides (zwei
-"RADIO"-Logos, zwei Textblöcke übereinander) - strukturell aber ein
-vollständig valides JPEG (korrekter SOI/EOI, keine Abbruch-/Timeout-Datei).
-Die Quelldatei auf der Box (`/tmp/N.JPG`) war zum Zeitpunkt der Erfassung
-bereits stabil und veränderte sich danach nicht mehr - der Fehler steckte
-also schon vor unserer Kopie im Ergebnis von `mediaclient`, nicht in einem
-Timing-Problem beim eigenen Stability-Check. In einem direkt anschließenden
-Test über mehrere Minuten (guter Empfang, SNR≈16-18) kamen 3 von 3 weiteren
-Slides sauber und einzeln an - deutet auf einen seltenen Einzelfall hin
-(z.B. eine kurze Empfangsstörung genau während der MOT-Segment-
-Zusammensetzung, oder ein seltener interner mediaclient-Fehler), nicht auf
-einen reproduzierbaren Bug in dieser Bridge. Falls das gehäuft auftritt,
-wäre der nächste Schritt eine striktere Validierung (z.B. Prüfung auf genau
-ein SOI/EOI-Paar ohne eingebettete zweite SOI-Marker im Datenstrom).
+FM nutzt statt Digital-Service-Daten den V4L2-nahen `FM_RDS_STATUS`-Ioctl,
+der pro Aufruf eine RDS-Gruppe liefert. Programmname (PS, Gruppe 0) und
+Radiotext (RT, Gruppe 2, mit A/B-Flag-Umschaltung für neuen vs.
+fortgesetzten Text) werden daraus zeichenweise zusammengesetzt (inkl. der
+EBU-Sonderzeichen-Tabelle für deutsche Umlaute), dazu Sender-ID (PI) und
+Programmtyp (PTY), sobald das Gerät `rdssync` meldet. `GET /fm/rds` liefert
+das Ergebnis. Genau wie bei DAB+ (Abschnitt 4.1/4.3) wird das Gerät nur
+geöffnet, während TVHeadend laut eigener Subscriptions-API tatsächlich
+gerade FM streamt - andernfalls würde allein das Öffnen des Geräteknotens
+den gemeinsamen Tuner ungefragt in den FM-Modus zwingen (siehe
+[ARCHITECTURE.md](ARCHITECTURE.md#gemeinsamer-tuner-dab-und-fm-schliessen-sich-gegenseitig-aus)).
 
-**Architektur** (`bridge/dab_bridge.py:digital_data_loop()`): läuft als
-Hintergrund-Thread, pollt `get_dab_now_playing()` alle 5s und hält genau
-einen `mediaclient --getdigitaldata`-Prozess am Leben, solange ein Sender
-läuft - neu gestartet bei Senderwechsel, komplett gestoppt im Leerlauf.
-Ein Senderwechsel wird erst nach **zwei aufeinanderfolgenden** übereinstim-
-menden Polls akzeptiert (Entprellung) - ein einzelner, transienter
-TVHeadend-Subscription-Ausreißer reichte in Tests aus, um einen laufenden
-Capture-Vorgang grundlos neu zu starten und ein bereits fertig geladenes
-Bild wegzuwerfen.
+### 4.5 Persistentes Debug-Log
 
-**Live gefundener Ausfall (2026-09-23): mehrere Bildtypen pro Sender statt
-eines einzelnen Covers.** Ein persistentes Debug-Log (`/dab/digitaldata_debug`,
-siehe unten) zeigte: manche Sender (live bestätigt bei NDR 2 und NDR Info)
-senden nicht ein einzelnes, rotierendes Cover, sondern **mehrere
-verschiedene Inhaltstypen** verschachtelt im 15-20s-Takt - Content-Namen wie
-`20260923_051518Z_PROGRAMMTIPP_47698.jpg` zeigen das explizit (`NEWS`,
-`SENDUNG`, `TEASER`, `TEASER2`, `COVER`, `WETTER`, `NEWS2`, `PROGRAMMTIPP`
-beobachtet). Die alte Logik (ein einzelnes `artwork.jpg`, bei jedem neuen
-Slide überschrieben) verwarf dadurch effektiv fast alles - ein neuer Typ
-überschrieb potenziell einen noch validen älteren, ohne dass zwischen den
-Typen unterschieden wurde. Zusätzlich zeigte sich bei diesen beiden
-Sendern: praktisch **jeder** Slide blieb bei Dateigröße 0 hängen (nie
-fertig übertragen), nur 2 von ~45 beobachteten kamen überhaupt mit Inhalt
-an, beide dann noch mit falschem EOI-Marker (abgeschnitten) - vermutlich
-Bandbreiten-/Timing-Problem bei diesen speziellen, inhaltsreichen Sendern,
-nicht in dieser Bridge behebbar.
+`GET /dab/digitaldata_debug` liefert die letzten 200 Zeilen eines
+persistenten Logs (`dab-tvh-bridge/digitaldata_debug2.log`), das jeden
+erfolgreichen Bild-Fund und jeden erkannten Senderwechsel protokolliert -
+unabhängig von `print()`/journalctl, deren Ausgaben sich auf dieser Box als
+unzuverlässig erwiesen haben (journalctl rotiert innerhalb weniger Minuten
+alles weg).
 
-**Fix (Bild-Puffer statt Einzelbild)**: `ARTWORK_DIR` (statt einer festen
-`DAB_ARTWORK_PATH`-Datei) hält jetzt eine Datei pro erkanntem Typ
-(`_artwork_type_from_filename()` - erkennt das `<TYPE>`-Segment aus
-Content-Namen wie oben; einfache Zählernamen wie `37.JPG`, die die meisten
-Sender verwenden, fallen auf den Typ `cover` zurück). `/dab/artwork_info`
-liefert zusätzlich `types` (Liste aller aktuell gehaltenen Typen mit
-eigenem Zeitstempel); `/dab/artwork/<type>` liefert einen bestimmten Typ
-einzeln, `/dab/artwork` weiterhin den zuletzt aktualisierten (Rückwärts-
-kompatibilität). Die Home-Assistant-Markdown-Karte zeigt jetzt alle
-aktuell verfügbaren Typen des laufenden Senders statt nur eines Bildes.
-
-**Live gefundener Methodenfehler bei der eigenen Diagnose (2026-09-23):**
-während der Untersuchung oben lief zeitweise ein zweiter, unabhängiger
-`mediaclient --getdigitaldata`-Prozess parallel zur Produktions-Bridge auf
-demselben Gerät (zum rohen Mitschneiden). Das Debug-Log zeigt eindeutig:
-mit dem parallelen Prozess lieferte selbst RTL RADIO (sonst zuverlässig)
-zweimal hintereinander **korrupte** Dateien (SOI-Marker bereits falsch,
-nicht nur fehlendes EOI); unmittelbar danach, ganz ohne parallelen
-Prozess, gelang derselbe Sender wieder sauber. **Zwei gleichzeitige
-`mediaclient`-Instanzen auf demselben `/dev/dabN`-Gerät stören sich
-offenbar gegenseitig die Daten** - bei künftigen Rohdaten-Mitschnitten zur
-Fehlersuche nie parallel zur laufenden Bridge, sondern nur bei gestopptem
-`dab-bridge.service` oder nach dessen Neustart, wenn sicher kein eigener
-Capture-Vorgang für denselben Sender aktiv ist.
-
-**Persistentes Debug-Log** (`bridge/dab_bridge.py:_debug_log()`,
-`DIGITALDATA_DEBUG_LOG` = `dab-tvh-bridge/digitaldata_debug.log`, abrufbar
-über `GET /dab/digitaldata_debug`): protokolliert jede "OPENED:"-Zeile,
-jeden Erfassungsversuch (Start/Erfolg/Verwerfen mit Grund) und jeden
-Senderwechsel dauerhaft in eine Datei - eingeführt, weil sich `print()`-
-Ausgaben dieses Threads als unzuverlässig erwiesen (journalctl rotiert auf
-dieser Box innerhalb von ~15 Min. alles weg, siehe oben).
-
-### 4.4 TVHeadend-eigener Mux-Scan läuft nach dem eigenen Scan-Skript weiter
+### 4.6 TVHeadend-eigener Mux-Scan läuft nach dem eigenen Scan-Skript weiter
 
 Wichtig für alles, was den Tuner direkt anspricht (SDK-Frequenz-Sweeps,
-Signalqualitäts-Vergleiche etc.): der von `bridge/dab_bridge.py`
-ausgelöste Scan-Lauf (`/dab/status` → `running: false`, `returncode: 0`)
-bedeutet **nicht**, dass der Tuner wieder frei ist. TVHeadend arbeitet nach
-einem (Neu-)Scan seine eigene Mux-Scan-Queue im Hintergrund weiter ab -
-`scan_state` pro Mux (`/api/mpegts/mux/grid`, bzw. Feld-Enum über
-`/api/mpegts/mux/class`): `0`=INAKTIV (fertig), `1`=AUSSTEHEND (wartet in
-der Queue), `2`=IDLE PEND, `3`=AKTIV (wird gerade gescannt). Live
-beobachtet: direkt nach einem abgeschlossenen Standort-Scan standen noch
->25 DAB+-Muxe auf `AUSSTEHEND` und einer auf `AKTIV` - der Tuner war also
-noch minutenlang weiter beschäftigt.
-
-**Deshalb liefert `/dab/status` seit 2026-09-21 zusätzliche Felder**:
-`tvh_mux_scan_pending`, `tvh_mux_scan_active` und der zusammengefasste
+Signalqualitäts-Vergleiche etc.): ein von einer der beiden Bridges
+ausgelöster Scan-Lauf (`/dab/status`/`/fm/status` → `running: false`,
+`returncode: 0`) bedeutet **nicht**, dass der Tuner wieder frei ist.
+TVHeadend arbeitet nach einem (Neu-)Scan seine eigene Mux-Scan-Queue im
+Hintergrund weiter ab - `scan_state` pro Mux (`/api/mpegts/mux/grid`, bzw.
+Feld-Enum über `/api/mpegts/mux/class`): `0`=INAKTIV (fertig),
+`1`=AUSSTEHEND (wartet in der Queue), `2`=IDLE PEND, `3`=AKTIV (wird
+gerade gescannt). `/dab/status`/`/fm/status` liefern deshalb zusätzlich
+`tvh_mux_scan_pending`, `tvh_mux_scan_active` und den zusammengefassten
 Bool `tvh_scanning` - jeder Code, der den Tuner direkt (per SDK/ctypes)
-anspricht, sollte vorher `tvh_scanning: false` prüfen, nicht nur den
-eigenen `running`-Status. Der HA-Sensor `sensor.dab_scan_status` wertet
-das bereits mit aus (Zustand `scanning`, solange `running` **oder**
-`tvh_scanning` wahr ist).
+anspricht, sollte das prüfen, nicht nur den eigenen `running`-Status.
 
-### 4.5 Einordnung
+### 4.7 Einordnung
 
-Dieser SDK-Weg (Abschnitte 4.1-4.3) wird bewusst nur für Zusatz-
+Dieser SDK-Weg (Abschnitte 4.1-4.4) wird bewusst nur für Zusatz-
 informationen genutzt, die die HTTP-`cmd=`-API gar nicht anbietet
-(Signalqualität, Ensemble-Name, Cover-Art) - alles, was der Rest des
-Projekts ohnehin schon zuverlässig über die HTTP-API und die dokumentierten
-Service-Neustarts löst (Scan auslösen, Senderliste holen), bleibt bewusst
-dabei. Siehe [ARCHITECTURE.md](ARCHITECTURE.md), Abschnitt "Home Assistant
-Integration", für die Einordnung, warum keine generelle Umstellung auf
-diesen Weg sinnvoll ist.
+(Signalqualität, Ensemble-Name, Cover-Art/DLS, RDS) - alles, was der Rest
+des Projekts ohnehin schon zuverlässig über die HTTP-API und die
+dokumentierten Service-Neustarts löst (Scan auslösen, Senderliste holen),
+bleibt bewusst dabei. Siehe [ARCHITECTURE.md](ARCHITECTURE.md), Abschnitt
+"Home Assistant Integration", für die Einordnung, warum keine generelle
+Umstellung auf diesen Weg sinnvoll ist.
 
 ## 5. Zusammenfassung: alle Sundtek-bezogenen systemd-Units
 
@@ -485,10 +372,11 @@ diesen Weg sinnvoll ist.
 | `sundtek-rtspd.service` | RTSP/HTTP-Streaming, Web-Admin-UI, Sender-DB | 22000 |
 | `sundtek-ui-proxy.service` | Offline-Picon-Mirror für das Web-UI | 80 |
 
-Dazu kommen die beiden Projekt-eigenen Bridges (siehe
+Dazu kommen die drei Projekt-eigenen Bridges (siehe
 [docs/ARCHITECTURE.md](ARCHITECTURE.md)):
 
 | Unit | Zweck | Port |
 |---|---|---|
-| `dab-bridge.service` | DAB+ Rescan-Automatisierung, M3U für TVHeadend | 8081 |
-| `dvbt-bridge.service` | DVB-T Standort-Umschaltung/-Scan-Automatisierung | 8082 |
+| `bridge-dab.service` | DAB+ Scan-Automatisierung, Cover-Art/DLS, M3U für TVHeadend | 8091 |
+| `bridge-fm.service` | FM Scan-Automatisierung, RDS, M3U für TVHeadend | 8093 |
+| `bridge-dvbt.service` | DVB-T Standort-Umschaltung/-Scan-Automatisierung | 8082 |

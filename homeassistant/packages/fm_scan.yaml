@@ -1,45 +1,51 @@
-# Home Assistant package: FM-Radio-Integration fuer die Sundtek-Karte auf
-# dem Wohnwagen-LibreELEC (192.168.0.200). Eigener Dienst (fm-bridge,
-# Port 8083), analog zu dab_scan.yaml und dvbt_scan.yaml aufgebaut.
+# Home Assistant package: FM (Bridge fm_bridge2.py, Port 8093) fuer den
+# Sundtek-Stick auf dem Wohnwagen-LibreELEC (192.168.0.200). RDS wird
+# direkt ueber die Sundtek-SDK-API gelesen, TVHeadend besitzt und streamt
+# selbst per pipe://ffmpeg (siehe ARCHITECTURE.md).
 #
-# Installation:
-#  1. Diese Datei nach <config>/packages/fm_scan.yaml legen
-#  2. Betroffene Sensoren per Entwicklerwerkzeuge -> YAML -> "REST" neu
-#     laden (kein Home-Assistant-Neustart noetig)
-#  3. Dashboard-Karten aus homeassistant/dashboard_media_tab.yaml uebernehmen
+# FM und DAB+ (dab_scan.yaml) teilen sich denselben physischen Tuner und
+# schliessen sich deshalb beim Scannen/Streamen gegenseitig aus (siehe
+# ARCHITECTURE.md) - deshalb gibt es hier bewusst keinen GPS-Rescan-
+# Automatismus (nur DAB+ hat einen, siehe dab_scan.yaml).
 
 rest_command:
-  fm_trigger_rescan:
-    url: "http://192.168.0.200:8083/fm/rescan"
+  fm2_trigger_rescan:
+    url: "http://192.168.0.200:8093/fm/rescan"
     method: POST
     timeout: 10
-  fm_trigger_scan_new_location:
-    url: "http://192.168.0.200:8083/fm/scan_new_location?name={{ name | urlencode }}"
+  fm2_trigger_scan_new_location:
+    url: "http://192.168.0.200:8093/fm/scan_new_location?name={{ name | urlencode }}"
     method: POST
     timeout: 10
-  fm_trigger_activate:
-    url: "http://192.168.0.200:8083/fm/activate?name={{ name | urlencode }}"
+  fm2_trigger_activate:
+    url: "http://192.168.0.200:8093/fm/activate?name={{ name | urlencode }}"
     method: POST
     timeout: 10
-  fm_trigger_delete_location:
-    url: "http://192.168.0.200:8083/fm/delete_location?name={{ name | urlencode }}"
+  fm2_trigger_delete_location:
+    url: "http://192.168.0.200:8093/fm/delete_location?name={{ name | urlencode }}"
     method: POST
     timeout: 10
-  fm_trigger_exclude:
-    url: "http://192.168.0.200:8083/fm/exclude?name={{ name | urlencode }}&excluded={{ excluded }}"
+  fm2_trigger_exclude:
+    # name arrives pre-encoded from the calling script (dot -> %2E, see
+    # there for why) - do NOT run it through | urlencode again here, that
+    # would double-encode the already-literal "%2E" into "%252E".
+    url: "http://192.168.0.200:8093/fm/exclude?name={{ name }}&excluded={{ excluded }}"
     method: POST
     timeout: 10
-  fm_trigger_rename:
-    url: "http://192.168.0.200:8083/fm/rename?raw_name={{ raw_name | urlencode }}&display_name={{ display_name | urlencode }}"
+  fm2_trigger_rename:
+    # raw_name: see fm2_trigger_exclude above - already pre-encoded, do not
+    # | urlencode again. display_name is free text typed by the user, not a
+    # frequency, so it still needs the normal encoding here.
+    url: "http://192.168.0.200:8093/fm/rename?raw_name={{ raw_name }}&display_name={{ display_name | urlencode }}"
     method: POST
     timeout: 10
 
 rest:
-  - resource: "http://192.168.0.200:8083/fm/status"
+  - resource: "http://192.168.0.200:8093/fm/status"
     scan_interval: 15
     sensor:
-      - name: "FM Scan Status"
-        unique_id: fm_scan_status
+      - name: "FM v2 Scan Status"
+        unique_id: fm2_scan_status
         value_template: >-
           {% if value_json.running or value_json.tvh_scanning %}scanning
           {%- elif value_json.returncode == 0 %}idle
@@ -62,42 +68,42 @@ rest:
           - active_location
           - locations
           - log_tail
-      - name: "FM Senderanzahl"
-        unique_id: fm_station_count
+      - name: "FM v2 Senderanzahl"
+        unique_id: fm2_station_count
         value_template: "{{ value_json.station_count }}"
         unit_of_measurement: "Sender"
-      - name: "FM Aktiver Standort"
-        unique_id: fm_active_location
+      - name: "FM v2 Aktiver Standort"
+        unique_id: fm2_active_location
         value_template: "{{ value_json.active_location or 'live (kein gespeicherter Standort)' }}"
-  - resource: "http://192.168.0.200:8083/fm/stations"
+  - resource: "http://192.168.0.200:8093/fm/stations"
     scan_interval: 30
     sensor:
-      - name: "FM Sender Liste"
-        unique_id: fm_sender_liste
+      - name: "FM v2 Sender Liste"
+        unique_id: fm2_sender_liste
         value_template: "{{ value_json.stations | length }}"
         unit_of_measurement: "Sender"
         json_attributes:
           - stations
-  - resource: "http://192.168.0.200:8083/fm/signal"
+  - resource: "http://192.168.0.200:8093/fm/signal"
     scan_interval: 15
     sensor:
-      - name: "FM Signalstärke"
-        unique_id: fm_signal
+      - name: "FM v2 Signalstaerke"
+        unique_id: fm2_signal
         value_template: "{{ value_json.signal if value_json.signal is not none else 'unbekannt' }}"
         json_attributes:
           - device
           - signal
-  - resource: "http://192.168.0.200:8083/fm/now_playing"
+  - resource: "http://192.168.0.200:8093/fm/now_playing"
     scan_interval: 10
     sensor:
-      - name: "FM Aktueller Sender"
-        unique_id: fm_now_playing
+      - name: "FM v2 Aktueller Sender"
+        unique_id: fm2_now_playing
         value_template: "{{ value_json.playing | join(', ') if value_json.playing else 'nichts aktiv' }}"
-  - resource: "http://192.168.0.200:8083/fm/rds"
+  - resource: "http://192.168.0.200:8093/fm/rds"
     scan_interval: 5
     sensor:
-      - name: "FM RDS Sendername"
-        unique_id: fm_rds_ps
+      - name: "FM v2 RDS Sendername"
+        unique_id: fm2_rds_ps
         value_template: "{{ value_json.ps or 'kein RDS' }}"
         json_attributes:
           - ps
@@ -105,128 +111,140 @@ rest:
           - pi
           - pty
           - updated_at
-  - resource: "http://192.168.0.200:8083/fm/favorites"
+  - resource: "http://192.168.0.200:8093/fm/favorites"
     scan_interval: 60
     sensor:
-      - name: "FM Favoriten"
-        unique_id: fm_favoriten
+      - name: "FM v2 Favoriten"
+        unique_id: fm2_favoriten
         value_template: "{{ value_json.stations | length }}"
         unit_of_measurement: "Sender"
         json_attributes:
           - stations
 
 input_select:
-  fm_location_to_activate:
-    name: "FM gespeicherter Standort"
+  fm2_location_to_activate:
+    name: "FM v2 gespeicherter Standort"
     options:
       - "(noch keine geladen)"
-  fm_sender_auswahl:
-    name: "FM Sender auswaehlen"
+  fm2_sender_auswahl:
+    name: "FM v2 Sender auswaehlen"
     options:
       - "(noch keine geladen)"
 
 input_text:
-  fm_sender_neuer_name:
-    name: "FM Sender: neuer Anzeigename"
+  fm2_sender_neuer_name:
+    name: "FM v2 Sender: neuer Anzeigename"
     initial: ""
 
 script:
-  fm_rescan:
-    alias: "FM Sender neu scannen (ca. 2-3 Min)"
+  fm2_rescan:
+    alias: "FM v2 Sender neu scannen (ca. 2-3 Min)"
     icon: mdi:radio-fm
     sequence:
-      - service: rest_command.fm_trigger_rescan
+      - service: rest_command.fm2_trigger_rescan
 
-  fm_scan_new_location:
-    alias: "FM neuen Standort scannen (ca. 2-3 Min)"
+  fm2_scan_new_location:
+    alias: "FM v2 neuen Standort scannen (ca. 2-3 Min)"
     icon: mdi:radio-fm
     sequence:
-      - action: rest_command.fm_trigger_scan_new_location
+      - action: rest_command.fm2_trigger_scan_new_location
         data:
           name: "{{ states('input_text.neuer_standort_name') }}"
 
-  fm_activate_location:
-    alias: "FM gespeicherten Standort aktivieren"
+  fm2_activate_location:
+    alias: "FM v2 gespeicherten Standort aktivieren"
     icon: mdi:map-marker-radius
     sequence:
-      - action: rest_command.fm_trigger_activate
+      - action: rest_command.fm2_trigger_activate
         data:
-          name: "{{ states('input_select.fm_location_to_activate') }}"
+          name: "{{ states('input_select.fm2_location_to_activate') }}"
 
-  fm_delete_location:
-    alias: "FM gespeicherten Standort loeschen"
+  fm2_delete_location:
+    alias: "FM v2 gespeicherten Standort loeschen"
     icon: mdi:delete
     sequence:
-      - action: rest_command.fm_trigger_delete_location
+      - action: rest_command.fm2_trigger_delete_location
         data:
-          name: "{{ states('input_select.fm_location_to_activate') }}"
+          name: "{{ states('input_select.fm2_location_to_activate') }}"
 
-  fm_sender_ausschliessen:
-    alias: "FM Sender ausschliessen"
+  fm2_sender_ausschliessen:
+    alias: "FM v2 Sender ausschliessen"
     sequence:
-      - action: rest_command.fm_trigger_exclude
+      - action: rest_command.fm2_trigger_exclude
         data:
-          name: "{{ states('input_select.fm_sender_auswahl') }}"
+          # FM station "names" are bare frequency numbers (e.g. "91.50").
+          # A data field template that is a single bare expression gets
+          # its rendered TEXT re-parsed into a native Python type by Home
+          # Assistant whenever that text looks like a plain number - which
+          # silently turns "91.50" into the float 91.5, dropping the
+          # trailing zero (live-confirmed 2026-09-26; neither | string nor
+          # | tojson prevented this in practice). Replacing the dot with
+          # its percent-encoding makes the text non-numeric-looking, so it
+          # survives untouched - the receiving HTTP server decodes %2E
+          # back to "." automatically as part of normal URL-query parsing,
+          # no bridge-side change needed. See the matching comment on
+          # rest_command.fm2_trigger_exclude/fm2_trigger_rename above.
+          name: "{{ states('input_select.fm2_sender_auswahl') | replace('.', '%2E') }}"
           excluded: true
 
-  fm_sender_einschliessen:
-    alias: "FM Sender wieder einschliessen"
+  fm2_sender_einschliessen:
+    alias: "FM v2 Sender wieder einschliessen"
     sequence:
-      - action: rest_command.fm_trigger_exclude
+      - action: rest_command.fm2_trigger_exclude
         data:
-          name: "{{ states('input_select.fm_sender_auswahl') }}"
+          name: "{{ states('input_select.fm2_sender_auswahl') | replace('.', '%2E') }}"
           excluded: false
 
-  fm_sender_umbenennen:
-    alias: "FM Sender umbenennen"
+  fm2_sender_umbenennen:
+    alias: "FM v2 Sender umbenennen"
     sequence:
-      - action: rest_command.fm_trigger_rename
+      - action: rest_command.fm2_trigger_rename
         data:
-          raw_name: "{{ states('input_select.fm_sender_auswahl') }}"
-          display_name: "{{ states('input_text.fm_sender_neuer_name') }}"
+          raw_name: "{{ states('input_select.fm2_sender_auswahl') | replace('.', '%2E') }}"
+          display_name: "{{ states('input_text.fm2_sender_neuer_name') }}"
 
 automation:
-  - alias: "FM Standort-Dropdown befuellen"
+  - alias: "FM v2 Standort-Dropdown befuellen"
     trigger:
       - platform: state
-        entity_id: sensor.fm_scan_status
+        entity_id: sensor.fm_v2_scan_status
     action:
       - service: input_select.set_options
         target:
-          entity_id: input_select.fm_location_to_activate
+          entity_id: input_select.fm2_location_to_activate
         data:
           options: >-
-            {% set locs = state_attr('sensor.fm_scan_status', 'locations') or [] %}
+            {% set locs = state_attr('sensor.fm_v2_scan_status', 'locations') or [] %}
             {% if locs | length == 0 %}
             ["(noch keine geladen)"]
             {% else %}
             {{ locs | map(attribute='name') | list | tojson }}
             {% endif %}
 
-  - alias: "FM Sender-Dropdown befuellen"
+  - alias: "FM v2 Sender-Dropdown befuellen"
     trigger:
       - platform: state
-        entity_id: sensor.fm_sender_liste
+        entity_id: sensor.fm_v2_sender_liste
     action:
       - service: input_select.set_options
         target:
-          entity_id: input_select.fm_sender_auswahl
+          entity_id: input_select.fm2_sender_auswahl
         data:
           options: >-
-            {% set stations = state_attr('sensor.fm_sender_liste', 'stations') or [] %}
+            {% set stations = state_attr('sensor.fm_v2_sender_liste', 'stations') or [] %}
             {% if stations | length == 0 %}
             ["(noch keine geladen)"]
             {% else %}
             {{ stations | map(attribute='display_name') | list | tojson }}
             {% endif %}
 
-  - alias: "FM Umbenennen-Feld vorbefuellen"
+  - alias: "FM v2 Umbenennen-Feld vorbefuellen"
     trigger:
       - platform: state
-        entity_id: input_select.fm_sender_auswahl
+        entity_id: input_select.fm2_sender_auswahl
     action:
       - service: input_text.set_value
         target:
-          entity_id: input_text.fm_sender_neuer_name
+          entity_id: input_text.fm2_sender_neuer_name
         data:
           value: "{{ trigger.to_state.state }}"

@@ -1,88 +1,52 @@
-# Home Assistant package: DAB+ Rescan-Trigger fuer den Sundtek-Stick auf dem Wohnwagen-LibreELEC (192.168.0.200)
+# Home Assistant package: DAB+ (Bridge dab_bridge2.py, Port 8091) fuer den
+# Sundtek-Stick auf dem Wohnwagen-LibreELEC (192.168.0.200). Cover-Art/DLS
+# werden direkt ueber die Sundtek-SDK-API gelesen, TVHeadend besitzt und
+# streamt selbst per pipe://ffmpeg (siehe ARCHITECTURE.md).
 #
-# Installation:
-#  1. Diese Datei nach <config>/packages/dab_scan.yaml legen
-#     (Dateiname MUSS Unterstrich statt Bindestrich haben: dab_scan.yaml, nicht dab-scan.yaml)
-#     Falls "packages" noch nicht aktiv ist, in configuration.yaml ergaenzen:
-#        homeassistant:
-#          packages: !include_dir_named packages
-#  2. Home Assistant neu starten (Einstellungen -> System -> Neu starten)
-#  3. Dashboard-Karten hinzufuegen:
-#     - type: button, entity: script.dab_rescan   (Sender neu scannen)
-#     - type: tile,   entity: sensor.dab_scan_status
-#     - type: tile,   entity: sensor.dab_senderanzahl
-#     - type: tile,   entity: sensor.tvheadend_dab_kanaele
-#     - type: tile,   entity: sensor.dab_active_location
-#     - input_text.dab_new_location_name + script.dab_scan_new_location
-#     - input_select.dab_location_to_activate + script.dab_activate_location
-#       (Dropdown wird automatisch aus den gespeicherten Standorten befuellt)
-#
-# Hinweis: Der Endpunkt auf der LibreELEC-Box ist aktuell ungeschuetzt
-# (kein Passwort noetig), da er nur im privaten Wohnwagen-LAN erreichbar ist.
-#
-# Live-Signalqualitaet: sensor.dab_ensemble (Ensemble-Name als Zustand,
-# Attribute locked/rssi/snr/fic_quality/cnr) wird direkt ueber Sundteks
-# eigenes SDK (libmcsimple.so) gelesen, nicht ueber die HTTP-API - siehe
-# docs/TVHEADEND_QUIRKS.md im Projekt fuer Details/Grenzen dieses Wegs.
-#
-# Aktuell laufender Sender: sensor.dab_aktueller_sender - kommt NICHT vom
-# Tuner/SDK (dort liess sich der aktuell gewaehlte Sender nicht zuverlaessig
-# auslesen), sondern direkt aus TVHeadends eigener Subscriptions-Liste -
-# TVHeadend weiss ohnehin genau, welcher Kanal gerade an welchen Client
-# gestreamt wird.
-#
-# Sender ausschliessen oder umbenennen:
-# input_select.dab_sender_auswahl zeigt alle Sender des aktuellen Scans
-# (aus sensor.dab_sender_liste). Sender auswaehlen, dann
-# script.dab_sender_ausschliessen / _einschliessen oder (mit vorher
-# gesetztem input_text.dab_sender_neuer_name) script.dab_sender_umbenennen
-# ausloesen. Wirkt sich erst beim naechsten Neueinlesen der Playlist durch
-# TVHeadend aus - am sichersten also im Anschluss einmal
-# script.dab_rescan ausloesen.
-#
-# Automatischer Rescan bei Standortwechsel (unten im Package):
-# setzt voraus, dass "sensor.rutx50_gps_latitude/longitude/speed" existieren
-# (kommen aus dem teltonica_jasper Package, direkt vom RUTX50-GPS).
-# WICHTIG: bewusst NICHT device_tracker.tracker_wohnwagen verwendet - das ist
-# ein "Composite"-Tracker, der in Wirklichkeit person.admin (also dem
-# Handy/iPad des Nutzers) folgt, nicht das Fahrzeug. Fuer die tatsaechliche Wohnwagen-
-# Position sind die RUTX50-Sensoren die einzig korrekte Quelle.
-# Beim ersten Aktivieren ist sensor.dab_entfernung_letzter_scan noch nicht
-# gesetzt (Default 999 km), daher loest die Automation beim naechsten
-# 40-min-Stillstand direkt einmal aus.
+# DAB+ und FM (fm_scan.yaml) teilen sich denselben physischen Tuner und
+# schliessen sich deshalb beim Scannen/Streamen gegenseitig aus (siehe
+# ARCHITECTURE.md) - der GPS-Standortwechsel-Automatismus unten loest
+# deshalb bewusst nur einen DAB+-Rescan aus, keinen FM-Rescan.
 
 rest_command:
-  dab_trigger_rescan:
-    url: "http://192.168.0.200:8081/dab/rescan"
+  dab2_trigger_rescan:
+    url: "http://192.168.0.200:8091/dab/rescan"
     method: POST
     timeout: 10
-  dab_trigger_scan_new_location:
-    url: "http://192.168.0.200:8081/dab/scan_new_location?name={{ name | urlencode }}"
+  dab2_trigger_scan_new_location:
+    url: "http://192.168.0.200:8091/dab/scan_new_location?name={{ name | urlencode }}"
     method: POST
     timeout: 10
-  dab_trigger_activate_location:
-    url: "http://192.168.0.200:8081/dab/activate?name={{ name | urlencode }}"
+  dab2_trigger_activate_location:
+    url: "http://192.168.0.200:8091/dab/activate?name={{ name | urlencode }}"
     method: POST
     timeout: 10
-  dab_trigger_exclude:
-    url: "http://192.168.0.200:8081/dab/exclude?name={{ name | urlencode }}&excluded={{ excluded }}"
+  dab2_trigger_exclude:
+    # name/raw_name arrive pre-encoded from the calling script (dot ->
+    # %2E) as a defensive measure against a live-confirmed HA templating
+    # bug (see fm2_scan.yaml's matching rest_command for the full
+    # explanation) - do NOT run them through | urlencode again here, that
+    # would double-encode the already-literal "%2E" into "%252E". DAB+
+    # station names are never purely numeric today, but this costs
+    # nothing and removes the same latent risk.
+    url: "http://192.168.0.200:8091/dab/exclude?name={{ name }}&excluded={{ excluded }}"
     method: POST
     timeout: 10
-  dab_trigger_rename:
-    url: "http://192.168.0.200:8081/dab/rename?raw_name={{ raw_name | urlencode }}&display_name={{ display_name | urlencode }}"
+  dab2_trigger_rename:
+    url: "http://192.168.0.200:8091/dab/rename?raw_name={{ raw_name }}&display_name={{ display_name | urlencode }}"
     method: POST
     timeout: 10
-  dab_trigger_delete_location:
-    url: "http://192.168.0.200:8081/dab/delete_location?name={{ name | urlencode }}"
+  dab2_trigger_delete_location:
+    url: "http://192.168.0.200:8091/dab/delete_location?name={{ name | urlencode }}"
     method: POST
     timeout: 10
 
 rest:
-  - resource: "http://192.168.0.200:8081/dab/status"
+  - resource: "http://192.168.0.200:8091/dab/status"
     scan_interval: 15
     sensor:
-      - name: "DAB+ Scan Status"
-        unique_id: dab_scan_status
+      - name: "DAB+ v2 Scan Status"
+        unique_id: dab2_scan_status
         value_template: >-
           {% if value_json.running or value_json.tvh_scanning %}scanning
           {%- elif value_json.returncode == 0 %}idle
@@ -106,31 +70,31 @@ rest:
           - active_location
           - locations
           - log_tail
-      - name: "DAB+ Senderanzahl"
-        unique_id: dab_station_count
+      - name: "DAB+ v2 Senderanzahl"
+        unique_id: dab2_station_count
         value_template: "{{ value_json.station_count }}"
         unit_of_measurement: "Sender"
-      - name: "TVHeadend DAB+ Kanaele"
-        unique_id: dab_tvheadend_muxes
+      - name: "TVHeadend DAB+ v2 Kanaele"
+        unique_id: dab2_tvheadend_muxes
         value_template: "{{ value_json.tvheadend_muxes }}"
         unit_of_measurement: "Kanaele"
-      - name: "DAB+ Aktiver Standort"
-        unique_id: dab_active_location
+      - name: "DAB+ v2 Aktiver Standort"
+        unique_id: dab2_active_location
         value_template: "{{ value_json.active_location or 'live (kein gespeicherter Standort)' }}"
-  - resource: "http://192.168.0.200:8081/dab/stations"
+  - resource: "http://192.168.0.200:8091/dab/stations"
     scan_interval: 30
     sensor:
-      - name: "DAB+ Sender Liste"
-        unique_id: dab_sender_liste
+      - name: "DAB+ v2 Sender Liste"
+        unique_id: dab2_sender_liste
         value_template: "{{ value_json.stations | length }}"
         unit_of_measurement: "Sender"
         json_attributes:
           - stations
-  - resource: "http://192.168.0.200:8081/dab/signal"
+  - resource: "http://192.168.0.200:8091/dab/signal"
     scan_interval: 20
     sensor:
-      - name: "DAB+ Ensemble"
-        unique_id: dab_ensemble
+      - name: "DAB+ v2 Ensemble"
+        unique_id: dab2_ensemble
         value_template: "{{ value_json.ensemble or 'unbekannt' }}"
         json_attributes:
           - locked
@@ -142,151 +106,148 @@ rest:
           - sid
           - service_name
           - frequency
-      - name: "DAB+ Tuner Lock"
-        unique_id: dab_tuner_lock
+      - name: "DAB+ v2 Tuner Lock"
+        unique_id: dab2_tuner_lock
         value_template: "{{ 'locked' if value_json.locked else 'kein Empfang' }}"
-  - resource: "http://192.168.0.200:8081/dab/now_playing"
+  - resource: "http://192.168.0.200:8091/dab/now_playing"
     scan_interval: 10
     sensor:
-      - name: "DAB+ Aktueller Sender"
-        unique_id: dab_now_playing
+      - name: "DAB+ v2 Aktueller Sender"
+        unique_id: dab2_now_playing
         value_template: "{{ value_json.playing | join(', ') if value_json.playing else 'nichts aktiv' }}"
-  - resource: "http://192.168.0.200:8081/dab/artwork_info"
+  - resource: "http://192.168.0.200:8091/dab/now_playing_text"
+    scan_interval: 5
+    sensor:
+      - name: "DAB+ v2 Sendungsinfo (DLS)"
+        unique_id: dab2_dls_text
+        value_template: "{{ value_json.text or 'kein Text' }}"
+        json_attributes:
+          - text
+          - updated_at
+          - channel
+  - resource: "http://192.168.0.200:8091/dab/artwork_info"
     scan_interval: 10
     sensor:
-      - name: "DAB+ Sender Cover Status"
-        unique_id: dab_artwork_status
+      - name: "DAB+ v2 Sender Cover Status"
+        unique_id: dab2_artwork_status
         value_template: >-
           {% if not value_json.available %}kein Cover
-          {%- else %}{{ value_json.types | length }} Bild(er) ({{ value_json.channel }})
+          {%- else %}{{ value_json.type }} ({{ value_json.channel }})
           {%- endif %}
         json_attributes:
           - available
           - updated_at
           - channel
-          - types
-
-# HINWEIS: sowohl "camera: platform: generic" als auch "image: platform:
-# generic" sind in dieser HA-Version (2026.9.3) reine UI-Config-Flow-
-# Integrationen - YAML-Konfiguration schlaegt fehl (camera: legt die
-# Entity gar nicht erst an, image: wirft sogar einen klaren Fehler "No
-# module named ...generic.image"). Deshalb kein Entity fuer das Cover-Bild,
-# stattdessen direkt eine Markdown-Karte mit gejinja-tem Cache-Busting im
-# Dashboard - siehe dashboards/wohnwagen.yaml.
+          - type
 
 input_select:
-  dab_location_to_activate:
-    name: "DAB+ gespeicherter Standort"
+  dab2_location_to_activate:
+    name: "DAB+ v2 gespeicherter Standort"
     options:
       - "(noch keine geladen)"
-  dab_sender_auswahl:
-    name: "DAB+ Sender auswaehlen"
+  dab2_sender_auswahl:
+    name: "DAB+ v2 Sender auswaehlen"
     options:
       - "(noch keine geladen)"
 
 input_text:
-  dab_sender_neuer_name:
-    name: "DAB+ Sender: neuer Anzeigename"
+  dab2_sender_neuer_name:
+    name: "DAB+ v2 Sender: neuer Anzeigename"
     initial: ""
 
-script:
-  dab_rescan:
-    alias: "DAB+ Sender neu scannen (ca. 2-3 Min)"
-    icon: mdi:radio
-    sequence:
-      - service: rest_command.dab_trigger_rescan
-
-  dab_scan_new_location:
-    alias: "DAB+ neuen Standort scannen (ca. 2-3 Min)"
-    icon: mdi:radio
-    sequence:
-      - action: rest_command.dab_trigger_scan_new_location
-        data:
-          name: "{{ states('input_text.neuer_standort_name') }}"
-
-  dab_activate_location:
-    alias: "DAB+ Standort aktivieren"
-    icon: mdi:radio
-    sequence:
-      - action: rest_command.dab_trigger_activate_location
-        data:
-          name: "{{ states('input_select.dab_location_to_activate') }}"
-
-  dab_delete_location:
-    alias: "DAB+ Standort loeschen"
-    icon: mdi:delete
-    sequence:
-      - action: rest_command.dab_trigger_delete_location
-        data:
-          name: "{{ states('input_select.dab_location_to_activate') }}"
-
-  dab_sender_ausschliessen:
-    alias: "DAB+ Sender ausschliessen"
-    icon: mdi:radio-off
-    sequence:
-      - action: rest_command.dab_trigger_exclude
-        data:
-          name: "{{ states('input_select.dab_sender_auswahl') }}"
-          excluded: "true"
-
-  dab_sender_einschliessen:
-    alias: "DAB+ Sender wieder einschliessen"
-    icon: mdi:radio
-    sequence:
-      - action: rest_command.dab_trigger_exclude
-        data:
-          name: "{{ states('input_select.dab_sender_auswahl') }}"
-          excluded: "false"
-
-  dab_sender_umbenennen:
-    alias: "DAB+ Sender umbenennen"
-    icon: mdi:rename
-    sequence:
-      - action: rest_command.dab_trigger_rename
-        data:
-          raw_name: "{{ states('input_select.dab_sender_auswahl') }}"
-          display_name: "{{ states('input_text.dab_sender_neuer_name') }}"
-
-###############################################################
-# AUTOMATISCHER RESCAN BEI STANDORTWECHSEL
-#
-# Loest den Rescan aus, sobald das GPS-Speed-Signal (sensor.rutx50_gps_speed,
-# aus dem teltonica_jasper Package) mind. 40 Minuten am Stueck unter 3 km/h
-# liegt UND die aktuelle Position (sensor.rutx50_gps_latitude/longitude) mehr
-# als 500 m von der Position des letzten Scans entfernt ist - so wird nicht
-# bei jedem 40-minuetigen Stillstand am selben Stellplatz erneut gescannt.
-###############################################################
-
+# GPS-Standortwechsel-Automatismus (Rescan bei laengerem Halt an neuem Ort) -
+# siehe die Automatisierung "DAB+ v2 Rescan bei neuem Standort" unten fuer
+# die Bedingungen. Nur fuer DAB+, nicht fuer FM (gemeinsamer physischer
+# Tuner - ein GPS-getriggerter FM-Rescan wuerde mit einem laufenden DAB+-Scan
+# kollidieren, siehe ARCHITECTURE.md).
 input_number:
-  dab_last_scan_lat:
-    name: "DAB+ letzte Scan-Position (Breitengrad)"
+  dab2_last_scan_lat:
+    name: "DAB+ v2 letzte Scan-Position (Breitengrad)"
     min: -90
     max: 90
     step: 0.000001
     mode: box
-  dab_last_scan_lon:
-    name: "DAB+ letzte Scan-Position (Laengengrad)"
+  dab2_last_scan_lon:
+    name: "DAB+ v2 letzte Scan-Position (Laengengrad)"
     min: -180
     max: 180
     step: 0.000001
     mode: box
 
+script:
+  dab2_rescan:
+    alias: "DAB+ v2 Sender neu scannen (ca. 2-3 Min)"
+    icon: mdi:radio
+    sequence:
+      - service: rest_command.dab2_trigger_rescan
+
+  dab2_scan_new_location:
+    alias: "DAB+ v2 neuen Standort scannen (ca. 2-3 Min)"
+    icon: mdi:radio
+    sequence:
+      - action: rest_command.dab2_trigger_scan_new_location
+        data:
+          name: "{{ states('input_text.neuer_standort_name') }}"
+
+  dab2_activate_location:
+    alias: "DAB+ v2 Standort aktivieren"
+    icon: mdi:radio
+    sequence:
+      - action: rest_command.dab2_trigger_activate_location
+        data:
+          name: "{{ states('input_select.dab2_location_to_activate') }}"
+
+  dab2_delete_location:
+    alias: "DAB+ v2 Standort loeschen"
+    icon: mdi:delete
+    sequence:
+      - action: rest_command.dab2_trigger_delete_location
+        data:
+          name: "{{ states('input_select.dab2_location_to_activate') }}"
+
+  dab2_sender_ausschliessen:
+    alias: "DAB+ v2 Sender ausschliessen"
+    icon: mdi:radio-off
+    sequence:
+      - action: rest_command.dab2_trigger_exclude
+        data:
+          name: "{{ states('input_select.dab2_sender_auswahl') | replace('.', '%2E') }}"
+          excluded: "true"
+
+  dab2_sender_einschliessen:
+    alias: "DAB+ v2 Sender wieder einschliessen"
+    icon: mdi:radio
+    sequence:
+      - action: rest_command.dab2_trigger_exclude
+        data:
+          name: "{{ states('input_select.dab2_sender_auswahl') | replace('.', '%2E') }}"
+          excluded: "false"
+
+  dab2_sender_umbenennen:
+    alias: "DAB+ v2 Sender umbenennen"
+    icon: mdi:rename
+    sequence:
+      - action: rest_command.dab2_trigger_rename
+        data:
+          raw_name: "{{ states('input_select.dab2_sender_auswahl') | replace('.', '%2E') }}"
+          display_name: "{{ states('input_text.dab2_sender_neuer_name') }}"
+
 template:
   - sensor:
-      - name: "DAB+ Entfernung zum letzten Scan"
-        unique_id: dab_entfernung_letzter_scan
+      - name: "DAB+ v2 Entfernung zum letzten Scan"
+        unique_id: dab2_entfernung_letzter_scan
         unit_of_measurement: "km"
         state: >
           {% set lat1 = states('sensor.rutx50_gps_latitude') | float(none) %}
           {% set lon1 = states('sensor.rutx50_gps_longitude') | float(none) %}
-          {% set lat2 = states('input_number.dab_last_scan_lat') | float(0) %}
-          {% set lon2 = states('input_number.dab_last_scan_lon') | float(0) %}
+          {% set lat2 = states('input_number.dab2_last_scan_lat') | float(0) %}
+          {% set lon2 = states('input_number.dab2_last_scan_lon') | float(0) %}
           {{ (distance(lat1, lon1, lat2, lon2) | round(2)) if (lat1 is not none and lon1 is not none and lat2 and lon2) else 999 }}
-      - name: "DAB+ Sender Status (Auswahl)"
-        unique_id: dab_sender_status_auswahl
+      - name: "DAB+ v2 Sender Status (Auswahl)"
+        unique_id: dab2_sender_status_auswahl
         state: >
-          {% set sel = states('input_select.dab_sender_auswahl') %}
-          {% set stations = state_attr('sensor.dab_sender_liste', 'stations') or [] %}
+          {% set sel = states('input_select.dab2_sender_auswahl') %}
+          {% set stations = state_attr('sensor.dab_v2_sender_liste', 'stations') or [] %}
           {% set match = stations | selectattr('raw_name', 'eq', sel) | list %}
           {% if not match %}unbekannt
           {%- elif match[0].excluded %}ausgeschlossen
@@ -294,11 +255,11 @@ template:
           {%- endif %}
 
 automation:
-  - alias: "DAB+ Standort-Dropdown synchronisieren"
-    id: dab_sync_location_dropdown
+  - alias: "DAB+ v2 Standort-Dropdown synchronisieren"
+    id: dab2_sync_location_dropdown
     triggers:
       - platform: state
-        entity_id: sensor.dab_scan_status
+        entity_id: sensor.dab_v2_scan_status
       - platform: homeassistant
         event: start
       - platform: time_pattern
@@ -306,18 +267,18 @@ automation:
     actions:
       - action: input_select.set_options
         target:
-          entity_id: input_select.dab_location_to_activate
+          entity_id: input_select.dab2_location_to_activate
         data:
           options: >
-            {% set locs = (state_attr('sensor.dab_scan_status', 'locations') or [])
+            {% set locs = (state_attr('sensor.dab_v2_scan_status', 'locations') or [])
                  | map(attribute='name') | list %}
             {{ locs if locs else ["(noch keine geladen)"] }}
 
-  - alias: "DAB+ Sender-Dropdown synchronisieren"
-    id: dab_sync_sender_dropdown
+  - alias: "DAB+ v2 Sender-Dropdown synchronisieren"
+    id: dab2_sync_sender_dropdown
     triggers:
       - platform: state
-        entity_id: sensor.dab_sender_liste
+        entity_id: sensor.dab_v2_sender_liste
       - platform: homeassistant
         event: start
       - platform: time_pattern
@@ -325,31 +286,31 @@ automation:
     actions:
       - action: input_select.set_options
         target:
-          entity_id: input_select.dab_sender_auswahl
+          entity_id: input_select.dab2_sender_auswahl
         data:
           options: >
-            {% set names = (state_attr('sensor.dab_sender_liste', 'stations') or [])
+            {% set names = (state_attr('sensor.dab_v2_sender_liste', 'stations') or [])
                  | map(attribute='raw_name') | list %}
             {{ names if names else ["(noch keine geladen)"] }}
 
-  - alias: "DAB+ Sender: Anzeigename vorbefuellen"
-    id: dab_prefill_sender_name
+  - alias: "DAB+ v2 Sender: Anzeigename vorbefuellen"
+    id: dab2_prefill_sender_name
     triggers:
       - platform: state
-        entity_id: input_select.dab_sender_auswahl
+        entity_id: input_select.dab2_sender_auswahl
     actions:
       - action: input_text.set_value
         target:
-          entity_id: input_text.dab_sender_neuer_name
+          entity_id: input_text.dab2_sender_neuer_name
         data:
           value: >
-            {% set sel = states('input_select.dab_sender_auswahl') %}
-            {% set stations = state_attr('sensor.dab_sender_liste', 'stations') or [] %}
+            {% set sel = states('input_select.dab2_sender_auswahl') %}
+            {% set stations = state_attr('sensor.dab_v2_sender_liste', 'stations') or [] %}
             {% set match = stations | selectattr('raw_name', 'eq', sel) | list %}
             {{ match[0].display_name if match else sel }}
 
-  - alias: "DAB+ Rescan bei neuem Standort"
-    id: dab_rescan_on_location_change
+  - alias: "DAB+ v2 Rescan bei neuem Standort"
+    id: dab2_rescan_on_location_change
     mode: single
     triggers:
       - platform: numeric_state
@@ -359,17 +320,17 @@ automation:
           minutes: 40
     conditions:
       - condition: numeric_state
-        entity_id: sensor.dab_entfernung_zum_letzten_scan
+        entity_id: sensor.dab_v2_entfernung_zum_letzten_scan
         above: 0.5
     actions:
-      - action: script.dab_rescan
+      - action: script.dab2_rescan
       - action: input_number.set_value
         target:
-          entity_id: input_number.dab_last_scan_lat
+          entity_id: input_number.dab2_last_scan_lat
         data:
           value: "{{ states('sensor.rutx50_gps_latitude') }}"
       - action: input_number.set_value
         target:
-          entity_id: input_number.dab_last_scan_lon
+          entity_id: input_number.dab2_last_scan_lon
         data:
           value: "{{ states('sensor.rutx50_gps_longitude') }}"
