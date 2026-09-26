@@ -5,90 +5,6 @@
 
 cards:
   - type: tile
-    entity: sensor.dab_scan_status
-    name: DAB+ Scan Status
-  - type: entities
-    title: DAB+ Scan Details
-    entities:
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: dab_scanning
-        name: "DAB+ Tuner-Scan läuft"
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: dab_scan_current_freq
-        name: "DAB+ Scan - aktuelle Frequenz"
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: dab_scan_current_stations
-        name: "DAB+ Scan - Sender bisher gefunden"
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: dab_last_scan_freq
-        name: "Letzter DAB+ Scan - Frequenz"
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: dab_last_scan_stations
-        name: "Letzter DAB+ Scan - Sender gefunden"
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: tvh_mux_scan_pending
-        name: TVHeadend Mux-Scan ausstehend
-      - type: attribute
-        entity: sensor.dab_scan_status
-        attribute: tvh_mux_scan_active
-        name: TVHeadend Mux-Scan aktiv
-  - type: tile
-    entity: sensor.tvheadend_dab_kanaele
-  - type: tile
-    entity: sensor.dab_senderanzahl
-  - type: tile
-    entity: sensor.dab_aktiver_standort
-    name: DAB+ Aktiver Standort
-  - type: entities
-    title: DAB+ Empfang (live)
-    entities:
-      - entity: sensor.dab_ensemble
-        name: Ensemble
-      - entity: sensor.dab_tuner_lock
-        name: Tuner
-      - entity: sensor.dab_aktueller_sender
-        name: Aktueller Sender
-      - entity: sensor.dab_sender_cover_status
-        name: Cover Status
-  - type: markdown
-    content: >
-      ### DAB+ Sender Cover
-
-      {% set cover_channel = state_attr('sensor.dab_sender_cover_status', 'channel') %}
-      {% set now_playing = states('sensor.dab_aktueller_sender') %}
-      {% if state_attr('sensor.dab_sender_cover_status', 'available') and cover_channel == now_playing %}
-      ![DAB+ Sender Cover](http://192.168.0.200:8081/dab/artwork?t={{
-      state_attr('sensor.dab_sender_cover_status', 'updated_at') }})
-      {% else %}
-      *Noch kein Cover für "{{ now_playing }}" empfangen.*
-      {% endif %}
-  - type: entities
-    title: DAB+ Standort aktivieren
-    entities:
-      - entity: input_select.dab_location_to_activate
-        name: Gespeicherter Standort
-  - type: button
-    entity: script.dab_activate_location
-    name: DAB+ Standort aktivieren
-    icon: mdi:radio-tower
-  - type: button
-    entity: script.dab_delete_location
-    name: DAB+ Standort loeschen
-    icon: mdi:delete
-    tap_action:
-      action: call-service
-      service: script.turn_on
-      target:
-        entity_id: script.dab_delete_location
-      confirmation:
-        text: "Ausgewaehlten DAB+-Standort wirklich loeschen? Das kann nicht rueckgaengig gemacht werden."
-  - type: tile
     entity: sensor.dvb_t_status
     name: DVB-T Scan Status
   - type: tile
@@ -148,36 +64,14 @@ cards:
       confirmation:
         text: "Ausgewaehltes DVB-T-Netzwerk wirklich loeschen? Das kann nicht rueckgaengig gemacht werden."
   - type: entities
-    title: Neuer Standort (fuer DAB+ und DVB-T gemeinsam)
+    title: Neuer Standort (fuer DVB-T; DAB+ v2 hat unten eine eigene Karte)
     entities:
       - entity: input_text.neuer_standort_name
         name: Ortsname
   - type: button
-    entity: script.dab_scan_new_location
-    name: DAB+ neuen Standort scannen (ca. 2-3 Min)
-    icon: mdi:radio-tower
-  - type: button
     entity: script.dvbt_scan_new_location
     name: DVB-T neuen Standort scannen (ca. 5-8 Min)
     icon: mdi:antenna
-  - type: entities
-    title: DAB+ Sender verwalten
-    entities:
-      - entity: input_select.dab_sender_auswahl
-        name: Sender auswaehlen
-      - entity: sensor.dab_sender_status_auswahl
-        name: Status
-      - entity: input_text.dab_sender_neuer_name
-        name: Neuer Anzeigename
-      - entity: script.dab_sender_ausschliessen
-        name: Ausschliessen
-        icon: mdi:radio-off
-      - entity: script.dab_sender_einschliessen
-        name: Einschliessen
-        icon: mdi:radio
-      - entity: script.dab_sender_umbenennen
-        name: Umbenennen
-        icon: mdi:rename
   - type: entities
     title: DVB-T Sender verwalten (aktives Netzwerk)
     entities:
@@ -219,6 +113,238 @@ cards:
       - entity: script.dvbt_kanal_deaktivieren
         name: Deaktivieren
         icon: mdi:television-off
+  - type: markdown
+    content: >
+      ---
+
+      ## DAB+ / FM v2 (API-nativ, kein mediaclient)
+
+      Stationsliste/Scan laufen ueber die v2-Bridge, Cover-Art und
+      Sendungsinfo (DLS) kommen direkt ueber die Sundtek-SDK. Das
+      eigentliche Streaming ist wieder TVHeadends eigener pipe://ffmpeg
+      pro Mux (wie v1) - eine Variante, in der die Bridge selbst den
+      ffmpeg-Prozess haelt, erwies sich live als weniger stabil.
+  - type: tile
+    entity: sensor.dab_v2_scan_status
+    name: DAB+ v2 Scan Status
+  - type: entities
+    title: DAB+ v2 Scan Details
+    entities:
+      - type: attribute
+        entity: sensor.dab_v2_scan_status
+        attribute: dab_scanning
+        name: "DAB+ v2 Tuner-Scan läuft"
+      - type: attribute
+        entity: sensor.dab_v2_scan_status
+        attribute: dab_scan_current_freq
+        name: "DAB+ v2 Scan - aktuelle Frequenz"
+      - type: attribute
+        entity: sensor.dab_v2_scan_status
+        attribute: dab_scan_current_stations
+        name: "DAB+ v2 Scan - Sender bisher gefunden"
+      - type: attribute
+        entity: sensor.dab_v2_scan_status
+        attribute: tvh_mux_scan_pending
+        name: TVHeadend Mux-Scan ausstehend
+      - type: attribute
+        entity: sensor.dab_v2_scan_status
+        attribute: tvh_mux_scan_active
+        name: TVHeadend Mux-Scan aktiv
+  - type: tile
+    entity: sensor.dab_v2_sender_liste
+    name: DAB+ v2 Senderanzahl
+  - type: tile
+    entity: sensor.dab_v2_aktiver_standort
+    name: DAB+ v2 Aktiver Standort
+  - type: entities
+    title: DAB+ v2 Empfang (live)
+    entities:
+      - entity: sensor.dab_v2_ensemble
+        name: Ensemble
+      - entity: sensor.dab_v2_tuner_lock
+        name: Tuner
+      - type: attribute
+        entity: sensor.dab_v2_ensemble
+        attribute: rssi
+        name: Signalstärke (RSSI)
+      - type: attribute
+        entity: sensor.dab_v2_ensemble
+        attribute: snr
+        name: SNR
+      - type: attribute
+        entity: sensor.dab_v2_ensemble
+        attribute: frequency
+        name: Frequenz (Hz)
+      - type: attribute
+        entity: sensor.dab_v2_ensemble
+        attribute: sid
+        name: SID
+      - entity: sensor.dab_v2_aktueller_sender
+        name: Aktueller Sender
+      - entity: sensor.dab_v2_sendungsinfo_dls
+        name: "Sendungsinfo (DLS)"
+      - entity: sensor.dab_v2_sender_cover_status
+        name: Cover Status
+  - type: markdown
+    content: >
+      ### DAB+ v2 Sender Cover
+
+      {% set now_playing = states('sensor.dab_v2_aktueller_sender') %}
+      {% set available = state_attr('sensor.dab_v2_sender_cover_status', 'available') %}
+      {% set cover_channel = state_attr('sensor.dab_v2_sender_cover_status', 'channel') %}
+      {% set updated_at = state_attr('sensor.dab_v2_sender_cover_status', 'updated_at') %}
+      {% set dls = states('sensor.dab_v2_sendungsinfo_dls') %}
+      {% if not available or cover_channel != now_playing %}
+      *Noch kein Cover für "{{ now_playing }}" empfangen.*
+      {% else %}
+
+      ![Cover](http://192.168.0.200:8091/dab/artwork?u={{ updated_at }})
+
+      {% endif %}
+
+      **{{ dls }}**
+  - type: entities
+    title: DAB+ v2 Standort aktivieren
+    entities:
+      - entity: input_select.dab2_location_to_activate
+        name: Gespeicherter Standort
+  - type: button
+    entity: script.dab2_activate_location
+    name: DAB+ v2 Standort aktivieren
+    icon: mdi:radio-tower
+  - type: button
+    entity: script.dab2_delete_location
+    name: DAB+ v2 Standort loeschen
+    icon: mdi:delete
+    tap_action:
+      action: call-service
+      service: script.turn_on
+      target:
+        entity_id: script.dab2_delete_location
+      confirmation:
+        text: "Ausgewaehlten DAB+ v2-Standort wirklich loeschen? Das kann nicht rueckgaengig gemacht werden."
+  - type: button
+    entity: script.dab2_rescan
+    name: DAB+ v2 neu scannen (ca. 2-3 Min)
+    icon: mdi:radio-tower
+  - type: entities
+    title: DAB+ v2 neuen Standort scannen
+    entities:
+      - entity: input_text.neuer_standort_name
+        name: Ortsname
+  - type: button
+    entity: script.dab2_scan_new_location
+    name: DAB+ v2 neuen Standort scannen (ca. 2-3 Min)
+    icon: mdi:radio-tower
+  - type: entities
+    title: DAB+ v2 Sender verwalten
+    entities:
+      - entity: input_select.dab2_sender_auswahl
+        name: Sender auswaehlen
+      - entity: input_text.dab2_sender_neuer_name
+        name: Neuer Anzeigename
+      - entity: script.dab2_sender_ausschliessen
+        name: Ausschliessen
+        icon: mdi:radio-off
+      - entity: script.dab2_sender_einschliessen
+        name: Einschliessen
+        icon: mdi:radio
+      - entity: script.dab2_sender_umbenennen
+        name: Umbenennen
+        icon: mdi:rename
+  - type: tile
+    entity: sensor.fm_v2_scan_status
+    name: FM v2 Scan Status
+  - type: entities
+    title: FM v2 Scan Details
+    entities:
+      - type: attribute
+        entity: sensor.fm_v2_scan_status
+        attribute: fm_scanning
+        name: "FM v2 Tuner-Scan läuft"
+      - type: attribute
+        entity: sensor.fm_v2_scan_status
+        attribute: fm_scan_current_freq
+        name: "FM v2 Scan - aktuelle Frequenz"
+      - type: attribute
+        entity: sensor.fm_v2_scan_status
+        attribute: tvh_mux_scan_pending
+        name: TVHeadend Mux-Scan ausstehend
+      - type: attribute
+        entity: sensor.fm_v2_scan_status
+        attribute: tvh_mux_scan_active
+        name: TVHeadend Mux-Scan aktiv
+  - type: tile
+    entity: sensor.fm_v2_sender_liste
+    name: FM v2 Senderanzahl
+  - type: tile
+    entity: sensor.fm_v2_favoriten
+    name: FM v2 Favoriten (eigene Sundtek-Liste)
+  - type: tile
+    entity: sensor.fm_v2_aktiver_standort
+    name: FM v2 Aktiver Standort
+  - type: entities
+    title: FM v2 Empfang (live)
+    entities:
+      - entity: sensor.fm_v2_signalstaerke
+        name: Signalstärke
+      - entity: sensor.fm_v2_aktueller_sender
+        name: Aktueller Sender
+      - entity: sensor.fm_v2_rds_sendername
+        name: RDS Sendername
+      - type: attribute
+        entity: sensor.fm_v2_rds_sendername
+        attribute: radiotext
+        name: RDS Radiotext
+  - type: entities
+    title: FM v2 Standort aktivieren
+    entities:
+      - entity: input_select.fm2_location_to_activate
+        name: Gespeicherter Standort
+  - type: button
+    entity: script.fm2_activate_location
+    name: FM v2 Standort aktivieren
+    icon: mdi:radio-tower
+  - type: button
+    entity: script.fm2_delete_location
+    name: FM v2 Standort loeschen
+    icon: mdi:delete
+    tap_action:
+      action: call-service
+      service: script.turn_on
+      target:
+        entity_id: script.fm2_delete_location
+      confirmation:
+        text: "Ausgewaehlten FM v2-Standort wirklich loeschen? Das kann nicht rueckgaengig gemacht werden."
+  - type: button
+    entity: script.fm2_rescan
+    name: FM v2 neu scannen (ca. 2-3 Min)
+    icon: mdi:radio-fm
+  - type: entities
+    title: FM v2 neuen Standort scannen
+    entities:
+      - entity: input_text.neuer_standort_name
+        name: Ortsname
+  - type: button
+    entity: script.fm2_scan_new_location
+    name: FM v2 neuen Standort scannen (ca. 2-3 Min)
+    icon: mdi:radio-fm
+  - type: entities
+    title: FM v2 Sender verwalten
+    entities:
+      - entity: input_select.fm2_sender_auswahl
+        name: Sender auswaehlen
+      - entity: input_text.fm2_sender_neuer_name
+        name: Neuer Anzeigename
+      - entity: script.fm2_sender_ausschliessen
+        name: Ausschliessen
+        icon: mdi:radio-off
+      - entity: script.fm2_sender_einschliessen
+        name: Einschliessen
+        icon: mdi:radio
+      - entity: script.fm2_sender_umbenennen
+        name: Umbenennen
+        icon: mdi:rename
 
 #
 # WICHTIG bei eigener Anpassung: Home Assistant leitet die Entity-ID von

@@ -248,3 +248,105 @@ zusätzlich `tvh_mux_scan_pending`, `tvh_mux_scan_active` und den
 zusammengefassten Bool `tvh_scanning` (siehe
 [API.md](API.md)) - vor jedem direkten Tuner-Zugriff sollte das geprüft
 werden, nicht nur der eigene `running`-Status.
+
+## 13. `iptv_auto_network`-Netzwerkeinstellungen beeinflussen die Scan-Zuverlässigkeit erheblich - v2 musste v1 Feld für Feld angeglichen werden
+
+`dab_bridge2.py`s TVHeadend-Netzwerk ("DAB+ v2") wurde ursprünglich mit
+Werten angelegt, die von einem anderen, unverwandten Netzwerk-Beispiel
+kopiert wurden - nicht von "DAB+" (v1), obwohl beide dieselbe
+`iptv_auto_network`-Klasse verwenden und denselben physischen Tuner
+teilen. Live-Vergleich (2026-09-25) beider Netzwerk-Objekte über
+`/api/mpegts/network/grid` zeigte vier konkrete Abweichungen, die v2
+zuverlässig schlechter scannen ließen als das seit langem funktionierende
+v1:
+
+| Feld | v1 (funktioniert) | v2 (vorher) |
+|---|---|---|
+| `priority` / `spriority` | 50 | 1 |
+| `max_timeout` | 25 (später von Hand auf 10 reduziert, funktioniert ebenfalls) | 0 |
+| `idlescan` | `false` | `true` |
+| `scan_create` | `false` | `true` |
+
+**Fix**: v2 wurde gelöscht und mit exakt denselben Werten wie v1 neu
+angelegt (`priority`/`spriority: 50`, `max_timeout: 10`, `idlescan: false`,
+`scan_create: false`, dazu unverändert `skipinitscan: false`,
+`max_streams: 1`, `remove_args: "ticket"`, `ignore_chnum: true`,
+`refetch_period: 6000`). Live bestätigt danach: Services wurden wieder
+zuverlässig gefunden.
+
+**Zusätzlicher, unabhängiger Fund derselben Untersuchung**: `cmd=chlist`
+(Sundteks eigene API) liefert Stream-URLs mit dem Host, über den der
+zuletzt auslösende Client verbunden war - ruft `dab_bridge2.py`s eigener
+`_perform_dab_scan()` den Scan über `SUNDTEK_BASE = "http://127.0.0.1:22000"`
+auf (Loopback, da auf derselben Box laufend), tauchen in den
+zurückgelieferten URLs ebenfalls `127.0.0.1` auf - während v1s M3U (aus
+einer früher, anders ausgelösten Scan-Session) durchgehend die echte
+LAN-IP der Box zeigte. Live-Test bestätigte: mit der echten LAN-IP
+scannt es zuverlässig, mit `127.0.0.1` nicht. **Fix**: `build_m3u()` in
+`dab_bridge2.py` schreibt den Host in jeder Stream-URL jetzt explizit auf
+die Konstante `RTSPD_STREAM_HOST` (die reale LAN-IP der Box) um, statt dem
+von `cmd=chlist` gelieferten Host zu vertrauen.
+
+Damit sind **beide** heute vermuteten größeren Fehlerquellen dieselbe
+Kategorie: TVHeadend-Netzwerk-Konfigurationsfelder und die Sundtek-API
+selbst reagieren empfindlicher auf scheinbare Kleinigkeiten (Priorität,
+Timeout, Host-Adresse) als erwartet - beim Nachbauen eines neuen
+Netzwerks/einer neuen Bridge lohnt sich ein Feld-für-Feld-Diff gegen ein
+bekanntermaßen funktionierendes Pendant, bevor man tiefer in TVHeadends
+eigenem Scan-Verhalten sucht.
+
+## 14. Eigenes, Bridge-eigenes Streaming (statt TVHeadends `pipe://ffmpeg`) live getestet und wieder verworfen
+
+Eine Zwischenversion von `dab_bridge2.py` (und ein separater
+`tuner_bridge.py`-Arbiter für DAB+ *und* FM gemeinsam) ließ die Bridge
+selbst einen ffmpeg-Prozess pro Sender halten und TVHeadend nur eine
+`http://<box>:PORT/live?...`-URL zum Abonnieren geben, statt TVHeadend
+einen `pipe://ffmpeg ...`-Befehl direkt ausführen zu lassen (wie v1).
+Ziel war, dieselbe Tuner-Ressource über DAB+ *und* FM hinweg zentral zu
+verwalten.
+
+**Live widerlegt (2026-09-25)**: Ein direkter, kontrollierter Test mit
+zwei quasi-gleichzeitigen Verbindungen auf **derselbe** DAB+-Frequenz
+(unterschiedliche `sid`, gleicher `freq`) zeigte, dass rtspd trotzdem nur
+**eine** davon tatsächlich mit Daten beliefert - die zweite bekam
+durchgehend 0 Bytes, obwohl beide Services zum selben Ensemble gehören.
+Entscheidender noch: ein Abruf über TVHeadends **eigenen**
+`/stream/service/<uuid>`-Endpunkt (also exakt der Pfad, den `pipe://`
+benutzt) versagte zum selben Zeitpunkt identisch - das bewies, dass die
+Instabilität in der geteilten rtspd/Tuner-Schicht selbst liegt, nicht in
+der Bridge-Architektur. Der single-stream-eigene-ffmpeg-Ansatz brachte
+also keinen Vorteil gegenüber TVHeadends eigenem `pipe://`-Mechanismus,
+fügte aber zusätzliche Komplexität (eigener `_StreamManager`,
+Cross-Prozess-Koordination zwischen DAB+ und FM) ein.
+
+**Konsequenz**: `dab_bridge2.py` wurde auf `pipe://ffmpeg ...`
+zurückgebaut (identisch zu v1s `build_m3u()`, siehe Punkt 13 oben für die
+seitdem gefundenen echten Ursachen). `tuner_bridge.py` bleibt im Repo
+liegen (unbenutzt) als Referenz, falls die Idee mit besseren TVHeadend-
+Netzwerkeinstellungen nochmal aufgegriffen werden soll.
+
+## 15. TVHeadends Mux-Scan-Reihenfolge richtet sich nicht nach der M3U-Reihenfolge
+
+Quellcode-Analyse von `src/input/mpegts/mpegts_network_scan.c`
+(tvheadend/tvheadend auf GitHub, 2026-09-25): Pending-Muxe liegen in zwei
+Warteschlangen (`mn_scan_pend` für den Init-Scan, `mn_scan_ipend` für den
+Idle-Scan bei `idlescan: true`), sortiert per `mm_cmp()` primär nach
+`mm_scan_weight` (bei allen frisch angelegten Init-Scan-Muxen identisch)
+und erst bei Gleichstand nach einem internen Zeitstempel
+(`mm_start_monoclock`) - **nicht** nach Frequenz oder Position in der
+Quell-M3U. Ein Timer (`mpegts_network_scan_timer_cb`) feuert alle 120
+Sekunden und nimmt sich dabei jeweils **einen** Mux vom Kopf jeder Queue
+vor. Schlägt ein Versuch fehl, wird der Mux per `mm_scan_state =
+MM_SCAN_STATE_IDLE` markiert (UI-Anzeige "Inaktiv") und - sofern
+`idlescan: true` - automatisch in `mn_scan_ipend` zurückgehängt
+(`mpegts_network_scan_mux_done0()`), aber eben in die langsamere
+Idle-Queue, nicht sofort erneut in die Standard-Queue.
+
+**Konsequenz**: Ein Versuch in `build_m3u()`, Sender derselben Frequenz
+in der M3U-Datei benachbart anzuordnen ("damit TVHeadend sie
+hintereinander scannt"), hat auf die tatsächliche Scan-Reihenfolge keinen
+Einfluss - TVHeadend sortiert nach dem Einlesen ohnehin nach eigener
+Logik um. Die Sortierung in `build_m3u()` wurde trotzdem beibehalten
+(schadet nicht, hilft aber auch nicht der Scan-Reihenfolge) - der
+eigentliche Hebel für zuverlässiges Scannen war die Netzwerk-Konfiguration
+selbst (Punkt 13).

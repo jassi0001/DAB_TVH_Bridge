@@ -139,6 +139,9 @@ rest:
           - fic_quality
           - cnr
           - device
+          - sid
+          - service_name
+          - frequency
       - name: "DAB+ Tuner Lock"
         unique_id: dab_tuner_lock
         value_template: "{{ 'locked' if value_json.locked else 'kein Empfang' }}"
@@ -155,12 +158,13 @@ rest:
         unique_id: dab_artwork_status
         value_template: >-
           {% if not value_json.available %}kein Cover
-          {%- else %}verfuegbar ({{ value_json.channel }})
+          {%- else %}{{ value_json.types | length }} Bild(er) ({{ value_json.channel }})
           {%- endif %}
         json_attributes:
           - available
           - updated_at
           - channel
+          - types
 
 # HINWEIS: sowohl "camera: platform: generic" als auch "image: platform:
 # generic" sind in dieser HA-Version (2026.9.3) reine UI-Config-Flow-

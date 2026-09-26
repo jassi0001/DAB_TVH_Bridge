@@ -394,6 +394,56 @@ TVHeadend-Subscription-Ausreißer reichte in Tests aus, um einen laufenden
 Capture-Vorgang grundlos neu zu starten und ein bereits fertig geladenes
 Bild wegzuwerfen.
 
+**Live gefundener Ausfall (2026-09-23): mehrere Bildtypen pro Sender statt
+eines einzelnen Covers.** Ein persistentes Debug-Log (`/dab/digitaldata_debug`,
+siehe unten) zeigte: manche Sender (live bestätigt bei NDR 2 und NDR Info)
+senden nicht ein einzelnes, rotierendes Cover, sondern **mehrere
+verschiedene Inhaltstypen** verschachtelt im 15-20s-Takt - Content-Namen wie
+`20260923_051518Z_PROGRAMMTIPP_47698.jpg` zeigen das explizit (`NEWS`,
+`SENDUNG`, `TEASER`, `TEASER2`, `COVER`, `WETTER`, `NEWS2`, `PROGRAMMTIPP`
+beobachtet). Die alte Logik (ein einzelnes `artwork.jpg`, bei jedem neuen
+Slide überschrieben) verwarf dadurch effektiv fast alles - ein neuer Typ
+überschrieb potenziell einen noch validen älteren, ohne dass zwischen den
+Typen unterschieden wurde. Zusätzlich zeigte sich bei diesen beiden
+Sendern: praktisch **jeder** Slide blieb bei Dateigröße 0 hängen (nie
+fertig übertragen), nur 2 von ~45 beobachteten kamen überhaupt mit Inhalt
+an, beide dann noch mit falschem EOI-Marker (abgeschnitten) - vermutlich
+Bandbreiten-/Timing-Problem bei diesen speziellen, inhaltsreichen Sendern,
+nicht in dieser Bridge behebbar.
+
+**Fix (Bild-Puffer statt Einzelbild)**: `ARTWORK_DIR` (statt einer festen
+`DAB_ARTWORK_PATH`-Datei) hält jetzt eine Datei pro erkanntem Typ
+(`_artwork_type_from_filename()` - erkennt das `<TYPE>`-Segment aus
+Content-Namen wie oben; einfache Zählernamen wie `37.JPG`, die die meisten
+Sender verwenden, fallen auf den Typ `cover` zurück). `/dab/artwork_info`
+liefert zusätzlich `types` (Liste aller aktuell gehaltenen Typen mit
+eigenem Zeitstempel); `/dab/artwork/<type>` liefert einen bestimmten Typ
+einzeln, `/dab/artwork` weiterhin den zuletzt aktualisierten (Rückwärts-
+kompatibilität). Die Home-Assistant-Markdown-Karte zeigt jetzt alle
+aktuell verfügbaren Typen des laufenden Senders statt nur eines Bildes.
+
+**Live gefundener Methodenfehler bei der eigenen Diagnose (2026-09-23):**
+während der Untersuchung oben lief zeitweise ein zweiter, unabhängiger
+`mediaclient --getdigitaldata`-Prozess parallel zur Produktions-Bridge auf
+demselben Gerät (zum rohen Mitschneiden). Das Debug-Log zeigt eindeutig:
+mit dem parallelen Prozess lieferte selbst RTL RADIO (sonst zuverlässig)
+zweimal hintereinander **korrupte** Dateien (SOI-Marker bereits falsch,
+nicht nur fehlendes EOI); unmittelbar danach, ganz ohne parallelen
+Prozess, gelang derselbe Sender wieder sauber. **Zwei gleichzeitige
+`mediaclient`-Instanzen auf demselben `/dev/dabN`-Gerät stören sich
+offenbar gegenseitig die Daten** - bei künftigen Rohdaten-Mitschnitten zur
+Fehlersuche nie parallel zur laufenden Bridge, sondern nur bei gestopptem
+`dab-bridge.service` oder nach dessen Neustart, wenn sicher kein eigener
+Capture-Vorgang für denselben Sender aktiv ist.
+
+**Persistentes Debug-Log** (`bridge/dab_bridge.py:_debug_log()`,
+`DIGITALDATA_DEBUG_LOG` = `dab-tvh-bridge/digitaldata_debug.log`, abrufbar
+über `GET /dab/digitaldata_debug`): protokolliert jede "OPENED:"-Zeile,
+jeden Erfassungsversuch (Start/Erfolg/Verwerfen mit Grund) und jeden
+Senderwechsel dauerhaft in eine Datei - eingeführt, weil sich `print()`-
+Ausgaben dieses Threads als unzuverlässig erwiesen (journalctl rotiert auf
+dieser Box innerhalb von ~15 Min. alles weg, siehe oben).
+
 ### 4.4 TVHeadend-eigener Mux-Scan läuft nach dem eigenen Scan-Skript weiter
 
 Wichtig für alles, was den Tuner direkt anspricht (SDK-Frequenz-Sweeps,

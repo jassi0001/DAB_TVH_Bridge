@@ -5,6 +5,7 @@ import glob
 import json
 import os
 import pty
+import re
 import socket
 import subprocess
 import threading
@@ -33,6 +34,7 @@ MCSIMPLE_LIB = f"{DABPLUS_BASE}/opt/lib/libmcsimple.so"
 DAB_GET_TUNER = 68
 DAB_HAS_LOCK = 0x01
 DAB_GET_ENSEMBLE_INFO = 128
+DAB_GET_SERVICE = 111
 
 # Cover art / station logo (DAB+ "MOT Slideshow") capture. `mediaclient
 # --getdigitaldata` decodes this and any Dynamic Label (song title) text
@@ -44,7 +46,27 @@ DAB_GET_ENSEMBLE_INFO = 128
 # future mediaclient build starts emitting DLS text too, _digitaldata_reader
 # below is where to add parsing for it - see the TODO in that function.
 MEDIACLIENT_BIN = f"{DABPLUS_BASE}/opt/bin/mediaclient"
-DAB_ARTWORK_PATH = f"{BRIDGE_BASE}/artwork.jpg"
+# Live observed (2026-09-23): not every station's slideshow is a single
+# rotating cover image - some (e.g. NDR 2, NDR Info) interleave several
+# distinct content types under one service (news graphics, weather,
+# teasers, programme tips, the actual cover) at a fast pace, each with its
+# own content-name pattern like "<date>_<time>Z_<TYPE>_<id>.jpg". Keeping
+# only ever the single latest successful capture meant most of these types
+# never got shown even when they DID arrive intact, since a later type's
+# (possibly still-incomplete) slide could "currently be in progress"
+# without ever superseding the last complete one in a meaningful way, and
+# there was no way to tell them apart anyway. ARTWORK_DIR instead holds one
+# file per content type (see _artwork_type_from_filename), so e.g. a
+# completed "wetter" capture keeps showing even while "sendung" is mid
+# transfer.
+ARTWORK_DIR = f"{BRIDGE_BASE}/artwork"
+DEFAULT_ARTWORK_TYPE = "cover"
+# Matches mediaclient's own long-form content names, e.g.
+# "20260923_051518Z_PROGRAMMTIPP_47698.jpg" -> type "programmtipp". Plain
+# incrementing counters like "37.JPG" (most stations tested so far) don't
+# match and fall back to DEFAULT_ARTWORK_TYPE - not a real distinction
+# there since those stations only ever send one type of slide anyway.
+_ARTWORK_TYPE_RE = re.compile(r"^\d{8}_\d{6}Z_([A-Za-z0-9]+)_\d+\.\w+$")
 DIGITALDATA_POLL_SECONDS = 5
 FFMPEG_BIN = "ffmpeg"
 AUDIO_BITRATE = "192k"
@@ -237,6 +259,22 @@ class _DabEnsembleInfo(ctypes.Structure):
     ]
 
 
+class _DabService(ctypes.Structure):
+    # matches struct dab_service in mediacmds.h - the currently selected
+    # service's own SID, straight from the tuner. There's no equivalent
+    # "get current frequency" ioctl in this SDK (DAB_SET_FREQUENCY is
+    # write-only); the frequency shown alongside this is looked up from the
+    # station's own stream URL instead (see get_dab_service_info()).
+    _pack_ = 1
+    _fields_ = [
+        ("id", ctypes.c_uint8),
+        ("service_name", ctypes.c_char * 17),
+        ("sid", ctypes.c_uint32),
+        ("comp", ctypes.c_uint16 * 10),
+        ("n_comp", ctypes.c_int8),
+    ]
+
+
 _mcsimple = None
 
 
@@ -267,10 +305,38 @@ def _find_active_dab_device():
     return None
 
 
+def _current_station_frequency(channel_name):
+    """Best-effort frequency lookup for the given (TVHeadend display) channel
+    name, from the station's own stream URL - the SDK has no "get current
+    frequency" ioctl (DAB_SET_FREQUENCY is write-only), but mediasrv's own
+    chlist URLs always carry a "freq=" query parameter, and we already fetch
+    that list for /dab/stations. Returns None on any lookup failure (no
+    active location, name mismatch, network hiccup) - this is purely
+    cosmetic info for the dashboard, never worth failing the whole
+    /dab/signal response over."""
+    if not channel_name:
+        return None
+    try:
+        renames = load_renames()
+        for raw_name, url in fetch_stations():
+            display_name = renames.get(raw_name, raw_name)
+            if display_name == channel_name or raw_name == channel_name:
+                parsed = urllib.parse.urlsplit(url)
+                query = urllib.parse.parse_qs(parsed.query)
+                freq = (query.get("freq") or [None])[0]
+                return int(freq) if freq else None
+    except Exception:
+        return None
+    return None
+
+
 def get_dab_signal_info():
     """Ensemble name + tuner lock/signal quality, read directly via the SDK
     (libmcsimple.so) rather than the HTTP API, which doesn't expose this at
-    all."""
+    all. Also includes the current service's SID (DAB_GET_SERVICE, straight
+    from the tuner) and, best-effort, the tuned frequency (looked up from
+    the current station's own stream URL - see _current_station_frequency,
+    there's no direct "get frequency" ioctl in this SDK)."""
     lib = _get_mcsimple()
     candidates = sorted(glob.glob("/dev/dab*"), key=lambda p: os.stat(p).st_mtime, reverse=True)
     for device in candidates:
@@ -282,6 +348,11 @@ def get_dab_signal_info():
             lib.net_ioctl(fd, DAB_GET_TUNER, ctypes.byref(tuner))
             ens = _DabEnsembleInfo()
             lib.net_ioctl(fd, DAB_GET_ENSEMBLE_INFO, ctypes.byref(ens))
+            svc = _DabService()
+            lib.net_ioctl(fd, DAB_GET_SERVICE, ctypes.byref(svc))
+            service_name = svc.service_name.decode("ascii", "replace").strip()
+            channel = get_dab_now_playing()["playing"]
+            channel_name = channel[0] if channel else None
             return {
                 "device": device,
                 "locked": bool(tuner.status & DAB_HAS_LOCK),
@@ -290,10 +361,17 @@ def get_dab_signal_info():
                 "fic_quality": tuner.fic_quality,
                 "cnr": tuner.cnr,
                 "ensemble": ens.label.decode("ascii", "replace").strip(),
+                "sid": f"0x{svc.sid:X}" if svc.sid else None,
+                "service_name": service_name or None,
+                "frequency": _current_station_frequency(channel_name),
             }
         finally:
             lib.net_close(fd)
-    return {"device": None, "locked": False, "rssi": None, "snr": None, "fic_quality": None, "cnr": None, "ensemble": None}
+    return {
+        "device": None, "locked": False, "rssi": None, "snr": None,
+        "fic_quality": None, "cnr": None, "ensemble": None,
+        "sid": None, "service_name": None, "frequency": None,
+    }
 
 
 def get_dab_now_playing():
@@ -315,8 +393,25 @@ def get_dab_now_playing():
 _digitaldata_lock = threading.Lock()
 _digitaldata_proc = None
 _digitaldata_channel = None
-_artwork_updated_at = None
-_artwork_channel = None
+# Maps artwork "type" (see _artwork_type_from_filename) -> {"updated_at":
+# <ts>, "channel": <name>} for every type successfully captured for the
+# CURRENT channel. Replaces the old single artwork_updated_at/artwork_
+# channel pair now that a station can carry several concurrent slide types
+# (see ARTWORK_DIR above). Cleared (along with ARTWORK_DIR's contents)
+# every time the playing channel changes, same as the old single-file
+# state was.
+_artwork_buffer = {}
+
+
+def _artwork_type_from_filename(src):
+    m = _ARTWORK_TYPE_RE.match(os.path.basename(src))
+    return m.group(1).lower() if m else DEFAULT_ARTWORK_TYPE
+
+
+def _artwork_path_for_type(artwork_type):
+    return f"{ARTWORK_DIR}/{artwork_type}.jpg"
+
+
 # Bumped every time digital_data_loop() starts or stops a mediaclient
 # process (i.e. on every channel-state transition). A _copy_artwork_when_
 # stable() call captures the generation that was current when it was
@@ -414,15 +509,16 @@ def _copy_artwork_when_stable(src, channel, generation, checks=4, interval=2.0, 
         _debug_log(f"[watch] src={src!r} size={len(data)} failed SOI/EOI check after retry (SOI={data[:2].hex()}, EOI={data[-2:].hex()}) - discarded")
         return
 
-    global _artwork_updated_at, _artwork_channel
+    artwork_type = _artwork_type_from_filename(src)
+    artwork_path = _artwork_path_for_type(artwork_type)
     with _digitaldata_lock:
         if generation != _digitaldata_generation:
-            _debug_log(f"[watch] src={src!r} channel={channel!r} passed validation but generation stale ({generation} != {_digitaldata_generation}) - discarded")
+            _debug_log(f"[watch] src={src!r} channel={channel!r} type={artwork_type!r} passed validation but generation stale ({generation} != {_digitaldata_generation}) - discarded")
             return  # channel changed while this slide was being validated - discard, it's stale
     try:
-        os.makedirs(os.path.dirname(DAB_ARTWORK_PATH), exist_ok=True)
+        os.makedirs(ARTWORK_DIR, exist_ok=True)
         # Write to a temp file and rename into place rather than writing
-        # DAB_ARTWORK_PATH directly - a new slide typically arrives while
+        # artwork_path directly - a new slide typically arrives while
         # the previous one is still being served to an HTTP client (GET
         # /dab/artwork), and a plain open()+write() on the same path lets a
         # concurrent reader see a torn mix of the old and new file's bytes
@@ -442,17 +538,19 @@ def _copy_artwork_when_stable(src, channel, generation, checks=4, interval=2.0, 
         # tmp path race each other, so even the tmp file itself can end up
         # torn before the rename ever happens. Suffixing with the source
         # filename (mediaclient's own /tmp/<n>.JPG counter, unique per
-        # slide) gives each call its own tmp file.
-        tmp_path = f"{DAB_ARTWORK_PATH}.{os.path.basename(src)}.tmp"
+        # slide) gives each call its own tmp file - and since two different
+        # types can never collide on the same artwork_path anyway (that's
+        # the whole point of the per-type buffer), this only still matters
+        # for two overlapping slides of the SAME type.
+        tmp_path = f"{artwork_path}.{os.path.basename(src)}.tmp"
         with open(tmp_path, "wb") as f:
             f.write(data)
-        os.replace(tmp_path, DAB_ARTWORK_PATH)
+        os.replace(tmp_path, artwork_path)
         with _digitaldata_lock:
-            _artwork_updated_at = time.time()
-            _artwork_channel = channel
-        _debug_log(f"[watch] src={src!r} channel={channel!r} SUCCESS size={len(data)}")
+            _artwork_buffer[artwork_type] = {"updated_at": time.time(), "channel": channel}
+        _debug_log(f"[watch] src={src!r} channel={channel!r} type={artwork_type!r} SUCCESS size={len(data)}")
     except OSError as e:
-        _debug_log(f"[watch] src={src!r} channel={channel!r} write failed: {e}")
+        _debug_log(f"[watch] src={src!r} channel={channel!r} type={artwork_type!r} write failed: {e}")
 
 
 def _digitaldata_reader(master_fd, channel, generation):
@@ -547,13 +645,13 @@ def digital_data_loop():
                 _digitaldata_proc = None
                 _digitaldata_channel = None
                 with _digitaldata_lock:
-                    _artwork_updated_at = None
-                    _artwork_channel = None
+                    _artwork_buffer.clear()
                     _digitaldata_generation += 1
-                try:
-                    os.remove(DAB_ARTWORK_PATH)
-                except OSError:
-                    pass
+                for f in glob.glob(f"{ARTWORK_DIR}/*.jpg"):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
 
             if channel and _digitaldata_proc is None:
                 device = _find_active_dab_device()
@@ -586,22 +684,43 @@ def digital_data_loop():
 
 
 def get_dab_artwork_info():
+    """Status of the whole per-type artwork buffer. "types" lists every
+    currently-held slide type for the active channel (e.g. "cover",
+    "wetter", "sendung" - see _artwork_type_from_filename), each with its
+    own updated_at/channel and fetchable individually via
+    /dab/artwork/<type>. "available"/"updated_at"/"channel" mirror the
+    single most-recently-updated type, for backward compatibility with
+    /dab/artwork (no type suffix) and existing dashboards built against the
+    pre-buffer single-image API."""
     with _digitaldata_lock:
+        buffer_snapshot = dict(_artwork_buffer)
+    types = [
+        {"type": t, "updated_at": info["updated_at"], "channel": info["channel"]}
+        for t, info in sorted(buffer_snapshot.items(), key=lambda kv: kv[1]["updated_at"], reverse=True)
+    ]
+    if types:
+        latest = types[0]
         return {
-            "available": os.path.exists(DAB_ARTWORK_PATH),
-            "updated_at": _artwork_updated_at,
-            "channel": _artwork_channel,
+            "available": True,
+            "updated_at": latest["updated_at"],
+            "channel": latest["channel"],
+            "types": types,
         }
+    return {"available": False, "updated_at": None, "channel": None, "types": []}
 
 
 def _latest_scan_prid():
     # cmd=providers returns [[name, serial, 0, [prid, delsys, label], [prid, delsys, label], ...]]
     # scan history isn't append-only - prid indices get renumbered/pruned by
     # mediasrv, so this must be re-resolved on every use rather than cached.
+    # Scan history is shared across ALL delivery systems on this device (DAB+,
+    # FM, ...), so this MUST filter by delsys - picking the plain max prid
+    # picked up the FM bridge's own scans once FM scanning was added,
+    # serving FM stations under the DAB+ channel list.
     data = json.loads(_sundtek_post("cmd=providers"))
     if not data:
         return None
-    scans = [e for e in data[0] if isinstance(e, list) and len(e) == 3]
+    scans = [e for e in data[0] if isinstance(e, list) and len(e) == 3 and e[1] == DAB_DELSYS]
     if not scans:
         return None
     return max(scans, key=lambda e: e[0])[0]
@@ -1142,12 +1261,29 @@ class Handler(BaseHTTPRequestHandler):
                 tail = []
             _send_json(self, 200, {"log_tail": "".join(tail)})
             return
-        if path == "/dab/artwork":
-            if not os.path.exists(DAB_ARTWORK_PATH):
+        if path == "/dab/artwork" or path.startswith("/dab/artwork/"):
+            if path == "/dab/artwork":
+                # No type given - serve whichever one was captured most
+                # recently, same as the pre-buffer single-image behaviour.
+                with _digitaldata_lock:
+                    buffer_snapshot = dict(_artwork_buffer)
+                if not buffer_snapshot:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                artwork_type = max(buffer_snapshot, key=lambda t: buffer_snapshot[t]["updated_at"])
+            else:
+                artwork_type = path[len("/dab/artwork/"):].strip().lower()
+                if not re.fullmatch(r"[a-z0-9]+", artwork_type):
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+            artwork_path = _artwork_path_for_type(artwork_type)
+            if not os.path.exists(artwork_path):
                 self.send_response(404)
                 self.end_headers()
                 return
-            with open(DAB_ARTWORK_PATH, "rb") as f:
+            with open(artwork_path, "rb") as f:
                 body = f.read()
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")

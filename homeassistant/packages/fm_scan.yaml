@@ -1,0 +1,232 @@
+# Home Assistant package: FM-Radio-Integration fuer die Sundtek-Karte auf
+# dem Wohnwagen-LibreELEC (192.168.0.200). Eigener Dienst (fm-bridge,
+# Port 8083), analog zu dab_scan.yaml und dvbt_scan.yaml aufgebaut.
+#
+# Installation:
+#  1. Diese Datei nach <config>/packages/fm_scan.yaml legen
+#  2. Betroffene Sensoren per Entwicklerwerkzeuge -> YAML -> "REST" neu
+#     laden (kein Home-Assistant-Neustart noetig)
+#  3. Dashboard-Karten aus homeassistant/dashboard_media_tab.yaml uebernehmen
+
+rest_command:
+  fm_trigger_rescan:
+    url: "http://192.168.0.200:8083/fm/rescan"
+    method: POST
+    timeout: 10
+  fm_trigger_scan_new_location:
+    url: "http://192.168.0.200:8083/fm/scan_new_location?name={{ name | urlencode }}"
+    method: POST
+    timeout: 10
+  fm_trigger_activate:
+    url: "http://192.168.0.200:8083/fm/activate?name={{ name | urlencode }}"
+    method: POST
+    timeout: 10
+  fm_trigger_delete_location:
+    url: "http://192.168.0.200:8083/fm/delete_location?name={{ name | urlencode }}"
+    method: POST
+    timeout: 10
+  fm_trigger_exclude:
+    url: "http://192.168.0.200:8083/fm/exclude?name={{ name | urlencode }}&excluded={{ excluded }}"
+    method: POST
+    timeout: 10
+  fm_trigger_rename:
+    url: "http://192.168.0.200:8083/fm/rename?raw_name={{ raw_name | urlencode }}&display_name={{ display_name | urlencode }}"
+    method: POST
+    timeout: 10
+
+rest:
+  - resource: "http://192.168.0.200:8083/fm/status"
+    scan_interval: 15
+    sensor:
+      - name: "FM Scan Status"
+        unique_id: fm_scan_status
+        value_template: >-
+          {% if value_json.running or value_json.tvh_scanning %}scanning
+          {%- elif value_json.returncode == 0 %}idle
+          {%- elif value_json.returncode is not none %}error
+          {%- else %}unbekannt
+          {%- endif %}
+        json_attributes:
+          - running
+          - returncode
+          - station_count
+          - tvheadend_muxes
+          - fm_scanning
+          - fm_scan_current_freq
+          - fm_scan_current_stations
+          - fm_last_scan_freq
+          - fm_last_scan_stations
+          - tvh_mux_scan_pending
+          - tvh_mux_scan_active
+          - tvh_scanning
+          - active_location
+          - locations
+          - log_tail
+      - name: "FM Senderanzahl"
+        unique_id: fm_station_count
+        value_template: "{{ value_json.station_count }}"
+        unit_of_measurement: "Sender"
+      - name: "FM Aktiver Standort"
+        unique_id: fm_active_location
+        value_template: "{{ value_json.active_location or 'live (kein gespeicherter Standort)' }}"
+  - resource: "http://192.168.0.200:8083/fm/stations"
+    scan_interval: 30
+    sensor:
+      - name: "FM Sender Liste"
+        unique_id: fm_sender_liste
+        value_template: "{{ value_json.stations | length }}"
+        unit_of_measurement: "Sender"
+        json_attributes:
+          - stations
+  - resource: "http://192.168.0.200:8083/fm/signal"
+    scan_interval: 15
+    sensor:
+      - name: "FM Signalstärke"
+        unique_id: fm_signal
+        value_template: "{{ value_json.signal if value_json.signal is not none else 'unbekannt' }}"
+        json_attributes:
+          - device
+          - signal
+  - resource: "http://192.168.0.200:8083/fm/now_playing"
+    scan_interval: 10
+    sensor:
+      - name: "FM Aktueller Sender"
+        unique_id: fm_now_playing
+        value_template: "{{ value_json.playing | join(', ') if value_json.playing else 'nichts aktiv' }}"
+  - resource: "http://192.168.0.200:8083/fm/rds"
+    scan_interval: 5
+    sensor:
+      - name: "FM RDS Sendername"
+        unique_id: fm_rds_ps
+        value_template: "{{ value_json.ps or 'kein RDS' }}"
+        json_attributes:
+          - ps
+          - radiotext
+          - pi
+          - pty
+          - updated_at
+  - resource: "http://192.168.0.200:8083/fm/favorites"
+    scan_interval: 60
+    sensor:
+      - name: "FM Favoriten"
+        unique_id: fm_favoriten
+        value_template: "{{ value_json.stations | length }}"
+        unit_of_measurement: "Sender"
+        json_attributes:
+          - stations
+
+input_select:
+  fm_location_to_activate:
+    name: "FM gespeicherter Standort"
+    options:
+      - "(noch keine geladen)"
+  fm_sender_auswahl:
+    name: "FM Sender auswaehlen"
+    options:
+      - "(noch keine geladen)"
+
+input_text:
+  fm_sender_neuer_name:
+    name: "FM Sender: neuer Anzeigename"
+    initial: ""
+
+script:
+  fm_rescan:
+    alias: "FM Sender neu scannen (ca. 2-3 Min)"
+    icon: mdi:radio-fm
+    sequence:
+      - service: rest_command.fm_trigger_rescan
+
+  fm_scan_new_location:
+    alias: "FM neuen Standort scannen (ca. 2-3 Min)"
+    icon: mdi:radio-fm
+    sequence:
+      - action: rest_command.fm_trigger_scan_new_location
+        data:
+          name: "{{ states('input_text.neuer_standort_name') }}"
+
+  fm_activate_location:
+    alias: "FM gespeicherten Standort aktivieren"
+    icon: mdi:map-marker-radius
+    sequence:
+      - action: rest_command.fm_trigger_activate
+        data:
+          name: "{{ states('input_select.fm_location_to_activate') }}"
+
+  fm_delete_location:
+    alias: "FM gespeicherten Standort loeschen"
+    icon: mdi:delete
+    sequence:
+      - action: rest_command.fm_trigger_delete_location
+        data:
+          name: "{{ states('input_select.fm_location_to_activate') }}"
+
+  fm_sender_ausschliessen:
+    alias: "FM Sender ausschliessen"
+    sequence:
+      - action: rest_command.fm_trigger_exclude
+        data:
+          name: "{{ states('input_select.fm_sender_auswahl') }}"
+          excluded: true
+
+  fm_sender_einschliessen:
+    alias: "FM Sender wieder einschliessen"
+    sequence:
+      - action: rest_command.fm_trigger_exclude
+        data:
+          name: "{{ states('input_select.fm_sender_auswahl') }}"
+          excluded: false
+
+  fm_sender_umbenennen:
+    alias: "FM Sender umbenennen"
+    sequence:
+      - action: rest_command.fm_trigger_rename
+        data:
+          raw_name: "{{ states('input_select.fm_sender_auswahl') }}"
+          display_name: "{{ states('input_text.fm_sender_neuer_name') }}"
+
+automation:
+  - alias: "FM Standort-Dropdown befuellen"
+    trigger:
+      - platform: state
+        entity_id: sensor.fm_scan_status
+    action:
+      - service: input_select.set_options
+        target:
+          entity_id: input_select.fm_location_to_activate
+        data:
+          options: >-
+            {% set locs = state_attr('sensor.fm_scan_status', 'locations') or [] %}
+            {% if locs | length == 0 %}
+            ["(noch keine geladen)"]
+            {% else %}
+            {{ locs | map(attribute='name') | list | tojson }}
+            {% endif %}
+
+  - alias: "FM Sender-Dropdown befuellen"
+    trigger:
+      - platform: state
+        entity_id: sensor.fm_sender_liste
+    action:
+      - service: input_select.set_options
+        target:
+          entity_id: input_select.fm_sender_auswahl
+        data:
+          options: >-
+            {% set stations = state_attr('sensor.fm_sender_liste', 'stations') or [] %}
+            {% if stations | length == 0 %}
+            ["(noch keine geladen)"]
+            {% else %}
+            {{ stations | map(attribute='display_name') | list | tojson }}
+            {% endif %}
+
+  - alias: "FM Umbenennen-Feld vorbefuellen"
+    trigger:
+      - platform: state
+        entity_id: input_select.fm_sender_auswahl
+    action:
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.fm_sender_neuer_name
+        data:
+          value: "{{ trigger.to_state.state }}"
