@@ -279,12 +279,24 @@ zuverlässigen HTTP-API plus dem dokumentierten Service-Neustart-Workaround
 
 **Cover-Art (Sender-Logo/Album-Cover)**: die Bridge liest MOT-Slideshow-
 Bilder direkt über die `ctypes`-SDK aus (kein externer Prozess) und stellt
-das aktuellste unter `/dab/artwork` bereit. Da Home Assistant 2026.9.3
-`camera`/`image` mit `platform: generic` nur noch als UI-Config-Flow
-unterstützt (YAML-Konfiguration erzeugt keine bzw. eine fehlerhafte
-Entity), wird das Bild stattdessen über eine `type: markdown`-Lovelace-
-Karte mit gejinja-tem Cache-Busting eingebunden (siehe
-`homeassistant/dashboard_media_tab.yaml`). Details in
+das aktuellste unter `/dab/artwork` bereit. Eingebunden wird das Bild in
+HA über eine **Generic-Camera-Integration** (`camera.dab_v2_sender_cover`,
+`still_image_url` = `/dab/artwork`) - **nicht** per YAML (Home Assistant
+2026.9.3 erzeugt darüber keine bzw. eine fehlerhafte Entity), sondern
+einmalig über Einstellungen -> Geräte & Dienste -> Integration hinzufügen
+-> "Generic Camera" angelegt; dieser Teil lebt deshalb nur in der
+Entity-Registry der Box, nicht in den YAML-Packages dieses Repos. Eine
+`type: markdown`-Lovelace-Karte bindet das Bild über
+`{{ state_attr('camera.dab_v2_sender_cover', 'entity_picture') }}` ein
+(siehe `homeassistant/dashboard_media_tab.yaml`) - dieser Pfad ist ein von
+HA selbst signierter, `/api/camera_proxy/...`-Pfad **relativ zu HA**, kein
+fest verdrahteter Link auf die Box-IP. Wichtig, falls HA per NAT/Reverse-
+Proxy von außerhalb des Wohnwagen-LANs erreichbar gemacht wird: eine
+frühere Version dieser Karte verlinkte direkt auf
+`http://<Box-IP>:8091/dab/artwork` - das funktionierte nur im lokalen LAN,
+da nur HAs eigener Port nach außen freigegeben war, nicht der der Bridge.
+Der Umweg über die Camera-Entity behebt das, ohne einen zusätzlichen Port
+öffnen zu müssen. Details zur Bilderfassung selbst in
 [SUNDTEK_INSTALL.md](SUNDTEK_INSTALL.md) Abschnitt 4.3.
 
 Drei Packages ([homeassistant/packages/](../homeassistant/packages/)),

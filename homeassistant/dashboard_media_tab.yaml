@@ -192,13 +192,12 @@ cards:
       {% set now_playing = states('sensor.dab_v2_aktueller_sender') %}
       {% set available = state_attr('sensor.dab_v2_sender_cover_status', 'available') %}
       {% set cover_channel = state_attr('sensor.dab_v2_sender_cover_status', 'channel') %}
-      {% set updated_at = state_attr('sensor.dab_v2_sender_cover_status', 'updated_at') %}
       {% set dls = states('sensor.dab_v2_sendungsinfo_dls') %}
       {% if not available or cover_channel != now_playing %}
       *Noch kein Cover für "{{ now_playing }}" empfangen.*
       {% else %}
 
-      ![Cover](http://192.168.0.200:8091/dab/artwork?u={{ updated_at }})
+      ![Cover]({{ state_attr('camera.dab_v2_sender_cover', 'entity_picture') }})
 
       {% endif %}
 
