@@ -28,6 +28,7 @@ bridge/                Die drei Python-Bridges + systemd-Units + Beispiel-Config
   dab_bridge2.py          DAB+ Scan-Automatisierung, Cover-Art/DLS, M3U fuer TVHeadend (Port 8091)
   fm_bridge2.py           FM Scan-Automatisierung, RDS, M3U fuer TVHeadend (Port 8093)
   dvbt_bridge.py          DVB-T Standort-Netzwerk-Automatisierung (Port 8082)
+  tuner_watchdog.py       Tuner-Watchdog: Gesundheitspruefung, Auto-Wiederherstellung, HA-API (Port 8094)
   local_ui_proxy.py       Offline-Picon-Mirror fuer das Sundtek-Web-UI (Port 80)
   bridge-*.service         systemd-Units (LibreELEC-Variante, /storage/.config/system.d/)
   *.txt.example            Beispiel-Konfiguration (Exclude-/Rename-Listen)
@@ -38,7 +39,7 @@ homeassistant/         Home-Assistant-Packages + Dashboard-Auszug
   packages/fm_scan.yaml     FM Steuerung (analog, ohne GPS-Automation)
   packages/dvbt_scan.yaml   DVB-T Steuerung (analog, inkl. Sender ausschliessen/umbenennen)
   packages/standort_input_snippet.yaml  gemeinsames Ortsnamen-Eingabefeld
-  dashboard_media_tab.yaml  Lovelace-Karten-Auszug
+  dashboard/dashboard_media_tab.yaml  Lovelace-Karten-Auszug
 
 docs/
   ARCHITECTURE.md         Gesamtarchitektur, Ablauf aller drei Pipelines
@@ -71,23 +72,19 @@ docs/
    die Box kopieren
 4. Die IP-Adressen/Pfade in den `.service`-Dateien und in den
    HA-Packages an deine Umgebung anpassen (in diesem Repo überall als
-   `192.168.0.200` platzgehalten). **Sicherheitshinweis**: `TVH_USER`/
-   `TVH_PASS` in den Bridge-Dateien stehen hier als Platzhalter-
-   Zugangsdaten (`claude`/`claude`) - vor dem Einsatz einen eigenen
-   TVHeadend-Benutzer (Configuration -> Users -> Access Entries) anlegen
-   und die Werte in allen drei Dateien ersetzen. Alle drei Bridges selbst
+   `192.168.0.200` platzgehalten). **Sicherheitshinweis**: Die TVHeadend-Zugangsdaten stehen nicht im Code, sondern in `/storage/dab-tvh-bridge/credentials.env` auf der Box (Vorlage: `bridge/credentials.env.example`, `chmod 600`, nicht im Repo). Ohne diese Datei laufen die Bridges mit den Platzhaltern `claude`/`claude`. Vorher einen eigenen TVHeadend-Benutzer anlegen (Configuration -> Users -> Access Entries). Alle drei Bridges selbst
    laufen komplett ungesichert (kein Passwort) - nur für ein
    vertrauenswürdiges privates LAN gedacht, nicht für den Einsatz in einem
    größeren/offenen Netz.
 5. Services aktivieren:
    ```sh
    systemctl daemon-reload
-   systemctl enable --now bridge-dab.service bridge-fm.service bridge-dvbt.service
+   systemctl enable --now bridge-dab.service bridge-fm.service bridge-dvbt.service tuner-watchdog.service
    ```
 6. HA-Packages nach `<config>/packages/` kopieren, `packages:
    !include_dir_named packages` in `configuration.yaml` sicherstellen,
    HA neu starten
-7. Dashboard-Karten aus `homeassistant/dashboard_media_tab.yaml`
+7. Dashboard-Karten aus `homeassistant/dashboard/dashboard_media_tab.yaml`
    übernehmen
 
 Details, Ablauf und alle Stolpersteine unterwegs: siehe

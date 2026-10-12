@@ -304,8 +304,24 @@ DIGITALDATA_DEBUG_LOG = f"{BRIDGE_BASE}/fm_debug2.log"
 
 TVH_HOST = "127.0.0.1"
 TVH_PORT = 9981
-TVH_USER = "claude"
-TVH_PASS = "claude"
+def _load_credentials(path=f"{BRIDGE_BASE}/credentials.env"):
+    """TVHeadend login from credentials.env (KEY=VALUE per line, '#' = comment)
+    next to the bridge; TVH_USER/TVH_PASS environment variables override it."""
+    creds = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    creds[key.strip()] = value.strip().strip("'\"")
+    except OSError:
+        print(f"WARNING: {path} not readable - using placeholder TVHeadend login")
+    return (os.environ.get("TVH_USER", creds.get("TVH_USER", "claude")),
+            os.environ.get("TVH_PASS", creds.get("TVH_PASS", "claude")))
+
+
+TVH_USER, TVH_PASS = _load_credentials()
 TVH_NETWORK_NAME = "FM v2"
 MAPPER_POLL_SECONDS = 30
 MAPPER_SETTINGS = {
@@ -704,12 +720,41 @@ def _rescan_log(line):
         pass
 
 
-def _perform_fm_scan():
-    _rescan_log("restarting sundtek-mediasrv + sundtek-rtspd (required before a scan will persist) ...")
+def _wait_tuner_ready(timeout=40, stable=2):
+    """Wait until mediasrv reports the tuner (scanstat with 13+ fields) on
+    `stable` consecutive polls. The tuner vanishes from mediasrv for a few
+    seconds after every mediasrv AND rtspd (re)start, and rtspd reads the
+    device table only once at startup - starting rtspd or scanning too early
+    leaves rtspd deaf (404 or empty streams). Same logic as tuner_watchdog.py."""
+    end = time.time() + timeout
+    good = 0
+    while time.time() < end:
+        try:
+            arr = json.loads(_sundtek_post(f"cmd=scanstat&deviceid={FM_DEVICE_ID}", timeout=4))
+            good = good + 1 if isinstance(arr, list) and len(arr) >= 13 else 0
+        except Exception:
+            good = 0
+        if good >= stable:
+            return True
+        time.sleep(2)
+    return False
+
+
+def _restart_sundtek_services():
     subprocess.run(["systemctl", "restart", "sundtek-mediasrv.service"], check=True)
     time.sleep(3)
+    if not _wait_tuner_ready():
+        _rescan_log("WARNING: mediasrv does not report the tuner yet - continuing anyway")
     subprocess.run(["systemctl", "restart", "sundtek-rtspd.service"], check=True)
+    time.sleep(4)
+    if not _wait_tuner_ready():
+        _rescan_log("WARNING: tuner not reported after rtspd start - continuing anyway")
     time.sleep(3)
+
+
+def _perform_fm_scan():
+    _rescan_log("restarting sundtek-mediasrv + sundtek-rtspd (required before a scan will persist) ...")
+    _restart_sundtek_services()
 
     _rescan_log("triggering FM scan and waiting for it to finish (up to 4 min) ...")
     _sundtek_post(f"scan=start&deviceid={FM_DEVICE_ID}&mode={FM_DELSYS}")

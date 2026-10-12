@@ -1,0 +1,166 @@
+# Home Assistant package: Sundtek-Tuner-Watchdog (tuner_watchdog.py, Port 8094)
+# auf dem Wohnwagen-LibreELEC (192.168.0.200).
+#
+# Der Watchdog prueft alle 15 s, ob der Stick am USB-Bus haengt, mediasrv den
+# Tuner kennt, rtspd (Port 22000) antwortet und DAB+/FM-Streams in TVHeadend
+# wirklich Daten bekommen. Bei einem Ausfall stellt er stufenweise wieder her
+# (rtspd -> mediasrv+rtspd -> USB-Rebind -> optional Reboot der Box).
+# Hier: Status-Sensor, Knoepfe fuer manuelle Neustarts, zwei Schalter und eine
+# Benachrichtigung bei automatischen Eingriffen.
+
+rest_command:
+  tuner_restart_rtspd:
+    url: "http://192.168.0.200:8094/tuner/restart?level=rtspd"
+    method: POST
+    timeout: 10
+  tuner_restart_services:
+    url: "http://192.168.0.200:8094/tuner/restart?level=services"
+    method: POST
+    timeout: 10
+  tuner_restart_usb:
+    url: "http://192.168.0.200:8094/tuner/restart?level=usb"
+    method: POST
+    timeout: 10
+  tuner_reboot_box:
+    url: "http://192.168.0.200:8094/tuner/restart?level=reboot"
+    method: POST
+    timeout: 10
+  tuner_set_config:
+    url: "http://192.168.0.200:8094/tuner/config?auto_recover={{ auto_recover }}&auto_reboot={{ auto_reboot }}"
+    method: POST
+    timeout: 10
+
+rest:
+  - resource: "http://192.168.0.200:8094/tuner/status"
+    scan_interval: 20
+    sensor:
+      - name: "Tuner Watchdog Status"
+        unique_id: tuner_watchdog_status
+        value_template: "{{ value_json.state }}"
+        json_attributes:
+          - healthy
+          - problem
+          - consecutive_failures
+          - recoveries_24h
+          - recoveries_total
+          - escalation_step
+          - auto_recover
+          - auto_reboot
+          - last_recovery
+          - last_ok
+          - uptime_s
+      - name: "Tuner Wiederherstellungen 24h"
+        unique_id: tuner_watchdog_recoveries_24h
+        value_template: "{{ value_json.recoveries_24h }}"
+        state_class: measurement
+
+input_boolean:
+  tuner_auto_recover:
+    name: "Tuner automatisch wiederherstellen"
+    icon: mdi:autorenew
+  tuner_auto_reboot:
+    name: "Tuner: Box bei Bedarf neu starten"
+    icon: mdi:restart-alert
+
+template:
+  - sensor:
+      - name: "Tuner letzte Wiederherstellung"
+        unique_id: tuner_last_recovery
+        state: >-
+          {% set r = state_attr('sensor.tuner_watchdog_status', 'last_recovery') %}
+          {% if r %}{{ r.at | timestamp_custom('%d.%m. %H:%M') }}
+          {%- else %}noch keine{% endif %}
+        attributes:
+          stufe: "{{ (state_attr('sensor.tuner_watchdog_status', 'last_recovery') or {}).get('level') }}"
+          grund: "{{ (state_attr('sensor.tuner_watchdog_status', 'last_recovery') or {}).get('reason') }}"
+          erfolgreich: "{{ (state_attr('sensor.tuner_watchdog_status', 'last_recovery') or {}).get('success') }}"
+          manuell: "{{ (state_attr('sensor.tuner_watchdog_status', 'last_recovery') or {}).get('manual') }}"
+
+script:
+  tuner_streamserver_neustarten:
+    alias: "Tuner: Streaming-Server (rtspd) neu starten"
+    icon: mdi:radio-tower
+    sequence:
+      - action: rest_command.tuner_restart_rtspd
+
+  tuner_dienste_neustarten:
+    alias: "Tuner: mediasrv + rtspd neu starten"
+    icon: mdi:restart
+    sequence:
+      - action: rest_command.tuner_restart_services
+
+  tuner_usb_zuruecksetzen:
+    alias: "Tuner: USB-Stick zuruecksetzen"
+    icon: mdi:usb-flash-drive
+    sequence:
+      - action: rest_command.tuner_restart_usb
+
+  tuner_box_neustarten:
+    alias: "Tuner: LibreELEC-Box neu starten"
+    icon: mdi:restart-alert
+    sequence:
+      - action: rest_command.tuner_reboot_box
+
+automation:
+  - alias: "Tuner: Schalter an Watchdog senden"
+    id: tuner_push_config
+    triggers:
+      - platform: state
+        entity_id:
+          - input_boolean.tuner_auto_recover
+          - input_boolean.tuner_auto_reboot
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (states('input_boolean.tuner_auto_recover') == 'on')
+             != (state_attr('sensor.tuner_watchdog_status', 'auto_recover') | bool(true))
+             or (states('input_boolean.tuner_auto_reboot') == 'on')
+             != (state_attr('sensor.tuner_watchdog_status', 'auto_reboot') | bool(false)) }}
+    actions:
+      - action: rest_command.tuner_set_config
+        data:
+          auto_recover: "{{ 1 if is_state('input_boolean.tuner_auto_recover', 'on') else 0 }}"
+          auto_reboot: "{{ 1 if is_state('input_boolean.tuner_auto_reboot', 'on') else 0 }}"
+
+  - alias: "Tuner: Schalter vom Watchdog uebernehmen"
+    id: tuner_pull_config
+    triggers:
+      - platform: state
+        entity_id: sensor.tuner_watchdog_status
+        attribute: auto_recover
+      - platform: state
+        entity_id: sensor.tuner_watchdog_status
+        attribute: auto_reboot
+      - platform: homeassistant
+        event: start
+    actions:
+      - action: "input_boolean.turn_{{ 'on' if state_attr('sensor.tuner_watchdog_status', 'auto_recover') else 'off' }}"
+        target:
+          entity_id: input_boolean.tuner_auto_recover
+      - action: "input_boolean.turn_{{ 'on' if state_attr('sensor.tuner_watchdog_status', 'auto_reboot') else 'off' }}"
+        target:
+          entity_id: input_boolean.tuner_auto_reboot
+
+  - alias: "Tuner: Benachrichtigung bei Eingriff oder Ausfall"
+    id: tuner_notify
+    mode: queued
+    triggers:
+      - platform: state
+        entity_id: sensor.tuner_watchdog_status
+        attribute: recoveries_total
+      - platform: state
+        entity_id: sensor.tuner_watchdog_status
+        to: "failed"
+        for: "00:01:00"
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: tuner_watchdog
+          title: "Sundtek-Tuner"
+          message: >-
+            {% set r = state_attr('sensor.tuner_watchdog_status', 'last_recovery') or {} %}
+            Status: {{ states('sensor.tuner_watchdog_status') }}.
+            Letzter Eingriff: Stufe "{{ r.get('level') }}", Grund "{{ r.get('reason') }}",
+            {{ 'erfolgreich' if r.get('success') else 'NICHT erfolgreich' }}.
+            Eingriffe in 24 h: {{ states('sensor.tuner_wiederherstellungen_24h') }}.
+            Details: /storage/dab-tvh-bridge/tuner_incidents/ auf der Box.

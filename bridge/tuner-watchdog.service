@@ -1,0 +1,13 @@
+[Unit]
+Description=Sundtek tuner watchdog (health check, auto-recovery, HA API on :8094)
+After=sundtek-rtspd.service service.tvheadend43.service
+Wants=sundtek-rtspd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /storage/dab-tvh-bridge/tuner_watchdog.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=kodi.target

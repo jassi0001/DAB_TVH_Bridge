@@ -40,9 +40,24 @@ DVB_RADIO_SERVICE_TYPES = {2, 10}
 
 TVH_HOST = "127.0.0.1"
 TVH_PORT = 9981
-TVH_USER = "claude"
-TVH_PASS = "claude"
+def _load_credentials(path=f"{BRIDGE_BASE}/credentials.env"):
+    """TVHeadend login from credentials.env (KEY=VALUE per line, '#' = comment)
+    next to the bridge; TVH_USER/TVH_PASS environment variables override it."""
+    creds = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    creds[key.strip()] = value.strip().strip("'\"")
+    except OSError:
+        print(f"WARNING: {path} not readable - using placeholder TVHeadend login")
+    return (os.environ.get("TVH_USER", creds.get("TVH_USER", "claude")),
+            os.environ.get("TVH_PASS", creds.get("TVH_PASS", "claude")))
 
+
+TVH_USER, TVH_PASS = _load_credentials()
 # One TVHeadend network per location, named "DVB-T <Ort>" by convention
 # (e.g. "DVB-T Example") - either created by hand today (Configuration ->
 # DVB inputs -> Networks -> wizard) or, via /dvbt/scan_new_location below,

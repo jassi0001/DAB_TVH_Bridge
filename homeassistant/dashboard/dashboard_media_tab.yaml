@@ -345,6 +345,41 @@ cards:
         name: Umbenennen
         icon: mdi:rename
 
+  - type: entities
+    title: Sundtek-Tuner (DAB+/FM)
+    entities:
+      - entity: sensor.tuner_watchdog_status
+        name: Watchdog-Status
+      - type: attribute
+        entity: sensor.tuner_watchdog_status
+        attribute: problem
+        name: Erkanntes Problem
+      - entity: sensor.tuner_letzte_wiederherstellung
+        name: Letzter Eingriff
+      - entity: sensor.tuner_wiederherstellungen_24h
+        name: Eingriffe (24 h)
+      - entity: input_boolean.tuner_auto_recover
+        name: Automatisch wiederherstellen
+      - entity: input_boolean.tuner_auto_reboot
+        name: Box bei Bedarf neu starten
+      - entity: script.tuner_streamserver_neustarten
+        name: Streaming-Server neu starten
+        icon: mdi:radio-tower
+      - entity: script.tuner_dienste_neustarten
+        name: mediasrv + rtspd neu starten
+        icon: mdi:restart
+      - entity: script.tuner_usb_zuruecksetzen
+        name: USB-Stick zuruecksetzen
+        icon: mdi:usb-flash-drive
+      - entity: script.tuner_box_neustarten
+        name: LibreELEC-Box neu starten
+        icon: mdi:restart-alert
+        tap_action:
+          action: call-service
+          service: script.tuner_box_neustarten
+          confirmation:
+            text: "Die ganze Box (Kodi, TVHeadend, alle Tuner) neu starten?"
+
 #
 # WICHTIG bei eigener Anpassung: Home Assistant leitet die Entity-ID von
 # REST-Sensoren/Automatisierungen vom Anzeigenamen ab, nicht von unique_id -
