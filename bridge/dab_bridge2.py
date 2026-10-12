@@ -61,7 +61,7 @@ SUNDTEK_BASE = "http://127.0.0.1:22000"
 # comparison against dab_bridge.py's still-working v1 list showed its M3U
 # consistently uses the box's real LAN IP instead, so pipe:// commands are
 # rewritten to match that rather than trusting whatever chlist returned.
-RTSPD_STREAM_HOST = "192.168.0.200"
+# RTSPD_STREAM_HOST is set from credentials.env further down (_load_env()).
 DAB_DEVICE_ID = 0
 DAB_DELSYS = 15
 
@@ -100,24 +100,34 @@ DAB_ACTIVE_LOCATION_FILE = f"{BRIDGE_BASE}/active_location.txt"
 
 TVH_HOST = "127.0.0.1"
 TVH_PORT = 9981
-def _load_credentials(path=f"{BRIDGE_BASE}/credentials.env"):
-    """TVHeadend login from credentials.env (KEY=VALUE per line, '#' = comment)
-    next to the bridge; TVH_USER/TVH_PASS environment variables override it."""
-    creds = {}
+def _load_env(path=f"{BRIDGE_BASE}/credentials.env"):
+    """Site-specific settings from credentials.env (KEY=VALUE per line, '#' =
+    comment) next to the bridge: TVH_USER, TVH_PASS and RTSPD_STREAM_HOST.
+    Environment variables of the same name override the file. Nothing
+    site-specific lives in the source."""
+    env = {}
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     key, _, value = line.partition("=")
-                    creds[key.strip()] = value.strip().strip("'\"")
+                    env[key.strip()] = value.strip().strip("'\"")
     except OSError:
-        print(f"WARNING: {path} not readable - using placeholder TVHeadend login")
-    return (os.environ.get("TVH_USER", creds.get("TVH_USER", "claude")),
-            os.environ.get("TVH_PASS", creds.get("TVH_PASS", "claude")))
+        print(f"WARNING: {path} not readable - using placeholder defaults")
+    for key in ("TVH_USER", "TVH_PASS", "RTSPD_STREAM_HOST"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    return env
 
 
-TVH_USER, TVH_PASS = _load_credentials()
+_ENV = _load_env()
+TVH_USER = _ENV.get("TVH_USER", "claude")
+TVH_PASS = _ENV.get("TVH_PASS", "claude")
+# Host rtspd stream URLs are rewritten to (see build_m3u()); the box's own LAN
+# address, set in credentials.env. Loopback works too when TVHeadend runs on
+# the same box.
+RTSPD_STREAM_HOST = _ENV.get("RTSPD_STREAM_HOST", "127.0.0.1")
 TVH_NETWORK_NAME = "DAB+ v2"
 MAPPER_POLL_SECONDS = 30
 MAPPER_SETTINGS = {

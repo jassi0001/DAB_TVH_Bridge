@@ -40,24 +40,30 @@ DVB_RADIO_SERVICE_TYPES = {2, 10}
 
 TVH_HOST = "127.0.0.1"
 TVH_PORT = 9981
-def _load_credentials(path=f"{BRIDGE_BASE}/credentials.env"):
-    """TVHeadend login from credentials.env (KEY=VALUE per line, '#' = comment)
-    next to the bridge; TVH_USER/TVH_PASS environment variables override it."""
-    creds = {}
+def _load_env(path=f"{BRIDGE_BASE}/credentials.env"):
+    """Site-specific settings from credentials.env (KEY=VALUE per line, '#' =
+    comment) next to the bridge: TVH_USER, TVH_PASS and RTSPD_STREAM_HOST.
+    Environment variables of the same name override the file. Nothing
+    site-specific lives in the source."""
+    env = {}
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     key, _, value = line.partition("=")
-                    creds[key.strip()] = value.strip().strip("'\"")
+                    env[key.strip()] = value.strip().strip("'\"")
     except OSError:
-        print(f"WARNING: {path} not readable - using placeholder TVHeadend login")
-    return (os.environ.get("TVH_USER", creds.get("TVH_USER", "claude")),
-            os.environ.get("TVH_PASS", creds.get("TVH_PASS", "claude")))
+        print(f"WARNING: {path} not readable - using placeholder defaults")
+    for key in ("TVH_USER", "TVH_PASS", "RTSPD_STREAM_HOST"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    return env
 
 
-TVH_USER, TVH_PASS = _load_credentials()
+_ENV = _load_env()
+TVH_USER = _ENV.get("TVH_USER", "claude")
+TVH_PASS = _ENV.get("TVH_PASS", "claude")
 # One TVHeadend network per location, named "DVB-T <Ort>" by convention
 # (e.g. "DVB-T Example") - either created by hand today (Configuration ->
 # DVB inputs -> Networks -> wizard) or, via /dvbt/scan_new_location below,

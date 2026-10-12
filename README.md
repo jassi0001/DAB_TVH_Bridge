@@ -72,7 +72,7 @@ docs/
    die Box kopieren
 4. Die IP-Adressen/Pfade in den `.service`-Dateien und in den
    HA-Packages an deine Umgebung anpassen (in diesem Repo überall als
-   `192.168.0.200` platzgehalten). **Sicherheitshinweis**: Die TVHeadend-Zugangsdaten stehen nicht im Code, sondern in `/storage/dab-tvh-bridge/credentials.env` auf der Box (Vorlage: `bridge/credentials.env.example`, `chmod 600`, nicht im Repo). Ohne diese Datei laufen die Bridges mit den Platzhaltern `claude`/`claude`. Vorher einen eigenen TVHeadend-Benutzer anlegen (Configuration -> Users -> Access Entries). Alle drei Bridges selbst
+   `192.168.0.200` platzgehalten). **Sicherheitshinweis**: Die TVHeadend-Zugangsdaten (`TVH_USER`, `TVH_PASS`) und die LAN-Adresse der Box (`RTSPD_STREAM_HOST`) stehen nicht im Code, sondern in `/storage/dab-tvh-bridge/credentials.env` auf der Box (Vorlage: `bridge/credentials.env.example`, `chmod 600`, nicht im Repo). Ohne diese Datei laufen die Bridges mit den Platzhaltern `claude`/`claude`. Vorher einen eigenen TVHeadend-Benutzer anlegen (Configuration -> Users -> Access Entries). Alle drei Bridges selbst
    laufen komplett ungesichert (kein Passwort) - nur für ein
    vertrauenswürdiges privates LAN gedacht, nicht für den Einsatz in einem
    größeren/offenen Netz.
